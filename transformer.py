@@ -85,7 +85,7 @@ def crossentropy(output: jnp.ndarray, target: int):
     return -jax.nn.log_softmax(output)[target]
 
 def linear(params, x: jnp.ndarray):
-    return jnp.matmul(x, params.weight) + params.bias[None,:]
+    return x @ params.weight + params.bias[None,:]
 
 def elementwise_linear(params, x: jnp.ndarray):
     return params.gain[None,:] * x + params.bias[None,:]
@@ -148,7 +148,7 @@ def transformer_init(rng: jax.random.KeyArray, n_vocab: int, d_model: int, n_lay
 
 def transformer(cfg, params, x: jnp.ndarray):
     """
-    cfg: Config, from init
+    cfg: Config, from transformer_init, holds hyperparameters
     params: Current transformer parameters, initialized in init
     x: 1D array of L integers, representing the input sequence
     output: L x n_vocab logits
