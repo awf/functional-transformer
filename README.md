@@ -1,4 +1,4 @@
-A fully functional (pun intended) implementation of a machine learning transformer model in Python/JAX
+A fully functional (pun intended) implementation of a machine learning transformer model in Python/JAX.  I do realize that 'pure functional' and 'Python' are not necessarily mots quit vont tres bien ensemble, but I'm sure you'll agree on reading the code that it has [una anima di pura programmazione funzionale](https://jax.readthedocs.io/en/latest/notebooks/Common_Gotchas_in_JAX.html).  And a little [macaronica](https://en.wikipedia.org/wiki/Macaronic_language) appeals to the peasant soul.  In other words, don't worry about the language... 
 
 Given only a few simple BLAS-like functions:
 ```python
