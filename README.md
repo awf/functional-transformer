@@ -67,19 +67,17 @@ The loss and its gradient needs a few more lines:
 def crossentropy(output: jnp.ndarray, target: int):
     return -jax.nn.log_softmax(output)[target]
 
-def seq_crossentropy(output: jnp.ndarray, targets: jnp.ndarray):
-    return vmap(crossentropy)(output, targets).mean()
-
 def loss(cfg, params, x):
     output = transformer(cfg, params, x)
-    return seq_crossentropy(output[:-1], x[1:])
+    xent = vmap(crossentropy)(output[:-1], x[1:])
+    return xent.mean()
 
 def loss_batch(cfg, params, seq):
-    batched = vmap(transformer_loss, in_axes=(None, None, 0), out_axes=0)
+    batched = vmap(loss, in_axes=(None, None, 0), out_axes=0)
     return jnp.mean(batched(cfg, params, seq))
 
-grad_loss_batch_unjit = jax.grad(loss_batch, argnums=1)
-grad_loss_batch = jax.jit(grad_loss_batch_unjit, static_argnums=0)
+# Gradient wrt 'params'
+grad_loss_batch = jax.grad(loss_batch, argnums=1)
 ```
 
 The random initialization is also short:
