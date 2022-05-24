@@ -2,7 +2,7 @@
 line-length = 88
 include = '\.pyi?$'
 extend-exclude = '''
-^/timer
+^/(timer|jaxutils)/
 '''
 
 # pyproject.toml
