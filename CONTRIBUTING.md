@@ -8,3 +8,4 @@ $ python main.py -help
 $ python main.py -layers 3 -dmodel 512 -heads 8 -dk 64 -dff 2048 
 ```
 
+Results at https://wandb.ai/awfidius/pure-transformer
