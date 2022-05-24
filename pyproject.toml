@@ -1,0 +1,15 @@
+[tool.black]
+line-length = 88
+include = '\.pyi?$'
+extend-exclude = '''
+^/timer
+'''
+
+# pyproject.toml
+[tool.pytest.ini_options]
+minversion = "6.0"
+# addopts = "-ra -q"
+testpaths = [
+    ".",
+    "jaxutils",
+]
