@@ -16,7 +16,7 @@ then the entire transformer forward computation is 22 lines of code (excerpt fro
 # Start with token embeddings
 embeddings = cfg.lambda_e * params.embeddings[x, :]     # L x Dm
 
-# Add positional encodings 
+# Add positional encodings
 embeddings += cfg.lambda_pe * params.positional_encodings[:L, :]
 
 # Apply the transformer layers
@@ -29,14 +29,14 @@ for layer in params.layers:
     # Multi-head self-attention
     for head in layer.heads:
 
-        # Project into this head's query/key space 
+        # Project into this head's query/key space
         query = linear(head.query, t1)                  # L x Dk
         key = linear(head.key, t1)                      # L x Dk
+        value = linear(head.value, t1)                  # L x Dm
 
         score = query @ key.T + mask                    # L x L
         attn = jax.nn.softmax(cfg.tau * score, axis=1)  # L x L
 
-        value = linear(head.value, t1)                  # L x Dm
         self_attn = attn @ value                        # L x Dm
 
         # Add this head's contribution into embeddings
@@ -46,7 +46,7 @@ for layer in params.layers:
     t2 = vmap(center)(embeddings)
     t2 = elementwise_linear(layer.norm_ff, t2)          # L x Dm
 
-    # Feedforward fully connected 
+    # Feedforward fully connected
     t2 = linear(layer.ffn1, t2)                         # L x Dff
     t2 = jax.nn.relu(t2)
     t2 = linear(layer.ffn2, t2)                         # L x Dm
@@ -59,7 +59,7 @@ embeddings = vmap(center)(embeddings)
 embeddings = elementwise_linear(params.pre_output_norm, embeddings)
 
 # And linearly project to output dimension
-return linear(params.output, embeddings)
+return linear(params.output, embeddings)                # L x n_vocab 
 ```
 
 The loss and its gradient needs a few more lines:
