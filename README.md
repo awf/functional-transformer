@@ -1,5 +1,4 @@
-# functional-transformer
-A pure-functional implementation of a machine learning transformer model in Python/JAX
+A fully functional (pun intended) implementation of a machine learning transformer model in Python/JAX
 
 Given only a few simple BLAS-like functions:
 ```python
