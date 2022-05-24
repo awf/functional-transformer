@@ -11,7 +11,7 @@ def elementwise_linear(params, x: jnp.ndarray):
 def center(x, eps = 1e-5):
     return (x - x.mean())/(x.std() + eps)
 ```
-then the entire transformer forward computation is 22 lines of code:
+then the entire transformer forward computation is 22 lines of code (excerpt from `transformer.py`):
 ```python
 # Start with token embeddings
 embeddings = cfg.lambda_e * params.embeddings[x, :]     # L x Dm
