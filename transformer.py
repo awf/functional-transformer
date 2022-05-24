@@ -46,6 +46,9 @@ def Linear_init0(rng: jax.random.KeyArray, in_features: int, out_features: int):
     return params
 
 def linear_init_uniform(rng: jax.random.KeyArray, in_features: int, out_features: int):
+    """
+    Initialize a linear layer with uniform weights and zero bias
+    """
     params = ParamsDict()
     rnd_range = 1 / in_features ** 0.5
     rng,params.weight = rand(rng, jax.random.uniform, (in_features, out_features),  
@@ -80,9 +83,6 @@ def center_commented(x, eps:float = 1e-5):
     return x_centered / jnp.sqrt(var + eps)
 
 # Compact primitives for 'all on one slide'
-
-def crossentropy(output: jnp.ndarray, target: int):
-    return -jax.nn.log_softmax(output)[target]
 
 def linear(params, x: jnp.ndarray):
     return x @ params.weight + params.bias[None,:]

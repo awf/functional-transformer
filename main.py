@@ -69,11 +69,11 @@ def main():
         print('Quick mode, disabling wandb')
         wandb.init(mode='disabled')
         epochs.default = 2
-        d_model.default = 128
+        # Choose primes, to catch any size mismatches
+        d_model.default = 93
         d_k.default = 13
         heads.default = 7
         d_ff.default = 111
-        print(epochs())
 
     start = time.time()
 
@@ -95,9 +95,8 @@ def main():
 
     sizes = jax.tree_map(lambda v:np.prod(v.shape), params)
     sizes.print('sizes:')
+    print('Total parameter count:', np.sum(jax.tree_flatten(sizes)[0]))
     # sizes_table = wandb.Table(columns=['param','size'])
-
-
 
     @partial(jax.jit, static_argnums=0)
     def loss_batch(cfg, params, seq): # seq: B x S
@@ -151,7 +150,7 @@ def main():
             params = optimizer.step(params, grads)
 
         # Log a sample after each epoch
-        prompt = [dataset.stoi[c] for c in 'It ']
+        prompt = [dataset.stoi[c] for c in 'Au']
         with timer('sample'):
             sampled = sample(cfg, params, jnp.array(prompt))[len(prompt):]
             print(loss, tostr(prompt) + '|' + tostr(sampled))
