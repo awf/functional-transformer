@@ -61,7 +61,28 @@ embeddings = elementwise_linear(params.pre_output_norm, embeddings)
 # And linearly project to output dimension
 return linear(params.output, embeddings)
 ```
-and the random initialization is even shorter:
+
+The loss and its gradient needs a few more lines:
+```python
+def crossentropy(output: jnp.ndarray, target: int):
+    return -jax.nn.log_softmax(output)[target]
+
+def seq_crossentropy(output: jnp.ndarray, targets: jnp.ndarray):
+    return vmap(crossentropy)(output, targets).mean()
+
+def loss(cfg, params, x):
+    output = transformer(cfg, params, x)
+    return seq_crossentropy(output[:-1], x[1:])
+
+def loss_batch(cfg, params, seq):
+    batched = vmap(transformer_loss, in_axes=(None, None, 0), out_axes=0)
+    return jnp.mean(batched(cfg, params, seq))
+
+grad_loss_batch_unjit = jax.grad(loss_batch, argnums=1)
+grad_loss_batch = jax.jit(grad_loss_batch_unjit, static_argnums=0)
+```
+
+The random initialization is also short:
 ```python
 params = ParamsDict()
 
@@ -97,3 +118,5 @@ for _ in range(n_layers):
 params.pre_output_norm = layernorm_init_identity(d_model)
 rng,params.output = linear_init_uniform(rng, d_model, n_vocab)
 ```
+
+Add an optimizer, and we are pronto a romblare.

@@ -31,9 +31,8 @@ def split(rng, *args):
 def crossentropy(output: jnp.ndarray, target: int):
     return -jax.nn.log_softmax(output)[target]
 
-def seq_crossentropy(output: jnp.ndarray, target: jnp.ndarray):
-    loss_vmap = vmap(crossentropy, in_axes=(0, 0,))
-    return loss_vmap(output, target).mean()
+def seq_crossentropy(output: jnp.ndarray, targets: jnp.ndarray):
+    return vmap(crossentropy)(output, targets).mean()
 
 # Linear layer Wx + b
 def Linear_init0(rng: jax.random.KeyArray, in_features: int, out_features: int):
