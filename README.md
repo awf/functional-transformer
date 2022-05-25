@@ -129,3 +129,7 @@ $ python main.py -layers 3 -dmodel 512 -heads 8 -dk 64 -dff 2048
 ```
 
 Results at https://wandb.ai/awfidius/pure-transformer
+
+## Acknowledgements
+
+The model is based on https://github.com/vpj/jax_transformer/blob/master/transformer.py, and the Adam and Dataset classes are almost direct copies from https://github.com/vpj/jax_transformer
