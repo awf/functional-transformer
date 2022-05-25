@@ -31,17 +31,6 @@ def rand(rng, f, shape, **kwargs):
     rng, rng1 = jax.random.split(rng)
     return rng, f(rng1, shape, **kwargs)
 
-def split(rng, *args):
-    return jax.random.split(rng, *args)
-
-
-def crossentropy(output: jnp.ndarray, target: int):
-    return -jax.nn.log_softmax(output)[target]
-
-
-def seq_crossentropy(output: jnp.ndarray, targets: jnp.ndarray):
-    return vmap(crossentropy)(output, targets).mean()
-
 
 # Linear layer Wx + b
 def Linear_init0(rng: jax.random.KeyArray, in_features: int, out_features: int):
@@ -175,6 +164,8 @@ def transformer_init(
 
     return rng, config, params
 
+
+# Format off for the size annotations
 # fmt: off
 def transformer(cfg, params, x: jnp.ndarray):
     """
@@ -184,7 +175,7 @@ def transformer(cfg, params, x: jnp.ndarray):
     output: L x n_vocab logits
     """
 
-    L = len(x)
+    L, = x.shape # x is just 1D. Vmap/pmap will handle batching
 
     # Create mask: 0 to attend, -Inf to ignore
     mask = jnp.log(jnp.tril(jnp.ones((L, L))))
@@ -236,7 +227,8 @@ def transformer(cfg, params, x: jnp.ndarray):
 
     # And linearly project to output dimension
     return linear(params.output, embeddings)                # L x n_vocab 
-#fmt: on
+# fmt: on
+
 
 def transformer_loss(cfg, params, x):
     """
@@ -249,6 +241,29 @@ def transformer_loss(cfg, params, x):
     output = transformer(cfg, params, x)
 
     return seq_crossentropy(output[:-1], x[1:])
+
+
+def crossentropy(output: jnp.ndarray, target: int):
+    return -jax.nn.log_softmax(output)[target]
+
+
+def seq_crossentropy(output: jnp.ndarray, targets: jnp.ndarray):
+    return vmap(crossentropy)(output, targets).mean()
+
+
+def crossentropy(output: jnp.ndarray, target: int):
+    return -jax.nn.log_softmax(output)[target]
+
+
+def loss(cfg, params, x):
+    output = transformer(cfg, params, x)
+    xent = vmap(crossentropy)(output[:-1], x[1:])
+    return xent.mean()
+
+
+def loss_batch(cfg, params, seq):
+    batched = vmap(loss, in_axes=(None, None, 0), out_axes=0)
+    return jnp.mean(batched(cfg, params, seq))
 
 
 def transformer_sample_unjit(cfg, params, seq: jnp.ndarray, length: int = 20):
