@@ -1,4 +1,4 @@
-A fully functional (pun intended) implementation of a machine learning transformer model in Python/JAX.  I do realize that 'pure functional' and 'Python' are not necessarily mots quit vont tres bien ensemble, but I'm sure you'll agree on reading the code that it has [una anima di pura programmazione funzionale](https://jax.readthedocs.io/en/latest/notebooks/Common_Gotchas_in_JAX.html).  And a little [macaronica](https://en.wikipedia.org/wiki/Macaronic_language) appeals to the peasant soul.  In other words, don't worry about the language... 
+A fully functional (pun intended) implementation of a machine learning transformer model in Python/JAX.  I do realize that 'pure functional' and 'Python' are not necessarily [mots quit vont très bien ensemble](https://forum.wordreference.com/threads/sont-les-mots-qui-vont-tr%C3%A8s-bien-ensemble.1832510/), but I'm sure you'll agree on reading the code that it has [una anima di pura programmazione funzionale](https://jax.readthedocs.io/en/latest/notebooks/Common_Gotchas_in_JAX.html).  And a little [macaronica](https://en.wikipedia.org/wiki/Macaronic_language) appeals to the peasant soul.  In other words, don't worry about the language... 
 
 Given only a few simple BLAS-like functions:
 ```python
@@ -11,7 +11,7 @@ def elementwise_linear(params, x: jnp.ndarray):
 def center(x, eps = 1e-5):
     return (x - x.mean())/(x.std() + eps)
 ```
-then the entire transformer forward computation is 22 lines of code (excerpt from `transformer.py`):
+then the entire transformer forward computation is 25 lines of code (excerpt from `transformer.py`):
 ```python
 def transformer(cfg, params, x: jnp.ndarray):
     """
@@ -29,7 +29,7 @@ def transformer(cfg, params, x: jnp.ndarray):
     # Start with token embeddings
     embeddings = cfg.lambda_e * params.embeddings[x, :]     # L x Dm
 
-    # Add positional encodings
+    # Add (learned) positional encodings
     embeddings += cfg.lambda_pe * params.positional_encodings[:L, :]
 
     # Apply the transformer layers
