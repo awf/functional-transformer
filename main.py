@@ -45,6 +45,10 @@ timer = timer.get_timer(logging.WARNING)
 db = logger.debug
 
 
+def tree_axpy(a, x, y):
+    return jax.tree_map(lambda x, y: a * x + y, x, y)
+
+
 def main():
 
     lr = Arg(flag="lr", doc="Learning rate", default=0.001)
@@ -54,6 +58,7 @@ def main():
     batch_size = Arg(flag="batch-size", doc="Batch size", default=128)
     epochs = Arg("epochs", 32)
     batches = Arg("batches", sys.maxsize, "Max batches")
+    opt1bit = Arg("1bit", False, "Use signs of gradients, not gradients")
 
     # Init the model params
     heads = Arg("heads", 8, "Number of attention heads")
@@ -168,7 +173,11 @@ def main():
             )  # 'gnorms': plt,  'gnorms_table': gnorms_table})
 
             # Update parameters
-            params = optimizer.step(params, grads)
+            if opt1bit():
+                gradsigns = jax.tree_map(jnp.sign, grads)
+                params = tree_axpy(-lr(), gradsigns, params)
+            else:
+                params = optimizer.step(params, grads)
 
         # Log a sample after each epoch
         prompt = [dataset.stoi[c] for c in "Au"]
