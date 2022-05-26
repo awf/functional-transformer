@@ -183,7 +183,7 @@ def transformer(cfg, params, x: jnp.ndarray):
     # Start with token embeddings
     embeddings = cfg.lambda_e * params.embeddings[x, :]     # L x Dm
 
-    # Add positional encodings
+    # Add (learned) positional encodings
     embeddings += cfg.lambda_pe * params.positional_encodings[:L, :]
 
     # Apply the transformer layers
@@ -249,10 +249,6 @@ def crossentropy(output: jnp.ndarray, target: int):
 
 def seq_crossentropy(output: jnp.ndarray, targets: jnp.ndarray):
     return vmap(crossentropy)(output, targets).mean()
-
-
-def crossentropy(output: jnp.ndarray, target: int):
-    return -jax.nn.log_softmax(output)[target]
 
 
 def loss(cfg, params, x):
