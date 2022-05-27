@@ -80,17 +80,16 @@ The loss and its gradient needs a few more lines:
 def crossentropy(output: jnp.ndarray, target: int):
     return -jax.nn.log_softmax(output)[target]
 
-def loss(cfg, params, x):
-    output = transformer(cfg, params, x)
-    xent = vmap(crossentropy)(output[:-1], x[1:])
-    return xent.mean()
+def seq_crossentropy(output: jnp.ndarray, targets: jnp.ndarray):
+    return vmap(crossentropy)(output, targets).mean()
 
-def loss_batch(cfg, params, seq):
-    batched = vmap(loss, in_axes=(None, None, 0), out_axes=0)
-    return jnp.mean(batched(cfg, params, seq))
+def transformer_loss(cfg, params, x):
+    output = transformer(cfg, params, x)
+
+    return seq_crossentropy(output[:-1], x[1:])
 
 # Gradient wrt 'params'
-grad_loss_batch = jax.grad(loss_batch, argnums=1)
+grad_loss = jax.grad(transformer_loss, argnums=1)
 ```
 
 The random initialization is also short:
@@ -145,4 +144,5 @@ Results at https://wandb.ai/awfidius/pure-transformer
 
 ## Acknowledgements
 
-The model is based on https://github.com/vpj/jax_transformer/blob/master/transformer.py, and the Adam and Dataset classes are almost direct copies from https://github.com/vpj/jax_transformer
+The model is based on https://github.com/vpj/jax_transformer/blob/master/transformer.py, and the Adam and Dataset 
+classes in jaxutils are almost direct copies from https://github.com/vpj/jax_transformer
