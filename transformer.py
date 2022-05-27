@@ -32,18 +32,6 @@ def rand(rng, f, shape, **kwargs):
     return rng, f(rng1, shape, **kwargs)
 
 
-# Linear layer Wx + b
-def Linear_init0(rng: jax.random.KeyArray, in_features: int, out_features: int):
-    params = ParamsDict()
-    rnd_range = 1 / in_features**0.5
-    params.weight = jax.random.uniform(
-        rng, (in_features, out_features), minval=-rnd_range, maxval=rnd_range
-    )
-
-    params.bias = jnp.zeros((out_features,))
-    return params
-
-
 def linear_init_uniform(rng: jax.random.KeyArray, in_features: int, out_features: int):
     """
     Initialize a linear layer with uniform weights and zero bias
@@ -63,31 +51,11 @@ def linear_init_uniform(rng: jax.random.KeyArray, in_features: int, out_features
 
 
 # Layer norm
-def layernorm_init_identity(shape):
+def elementwise_linear_init_identity(shape):
     """
     Initialize an elementwise_linear layer with unit gain, zero bias
     """
     return ParamsDict(gain=jnp.ones(shape), bias=jnp.zeros(shape))
-
-
-def linear_with_commented_shapes(params, x: jnp.ndarray):
-    return jnp.matmul(x, params.weight) + params.bias[None, :]
-    #                 L x N, N x M        |- 1 x M -|
-    #      |----- L x M --------------|   |- ? x M ---------|
-
-
-def center_commented(x, eps: float = 1e-5):
-    """
-    Return (x - mean(x))/std(x)
-
-    """
-    assert len(x.shape) == 1  # Used only on vectors in this example
-    x_centered = x - x.mean()
-    var = (x_centered**2).mean()
-    return x_centered / jnp.sqrt(var + eps)
-
-
-# Compact primitives for 'all on one slide'
 
 
 def linear(params, x: jnp.ndarray):
@@ -140,7 +108,7 @@ def transformer_init(
     params.layers = []
     for _ in range(n_layers):
         layer = ParamsDict()
-        layer.norm_self_attn = layernorm_init_identity(d_model)
+        layer.norm_self_attn = elementwise_linear_init_identity(d_model)
 
         layer.heads = []
         for _ in range(n_heads):
@@ -151,7 +119,7 @@ def transformer_init(
 
             layer.heads.append(head)
 
-        layer.norm_ff = layernorm_init_identity(d_model)
+        layer.norm_ff = elementwise_linear_init_identity(d_model)
 
         rng, layer.ffn1 = linear_init_uniform(rng, d_model, d_ff)
         rng, layer.ffn2 = linear_init_uniform(rng, d_ff, d_model)
@@ -159,7 +127,7 @@ def transformer_init(
         params.layers.append(layer)
 
     # Final normalization and output layer
-    params.pre_output_norm = layernorm_init_identity(d_model)
+    params.pre_output_norm = elementwise_linear_init_identity(d_model)
     rng, params.output = linear_init_uniform(rng, d_model, n_vocab)
 
     return rng, config, params
@@ -231,6 +199,14 @@ def transformer(cfg, params, x: jnp.ndarray):
 # fmt: on
 
 
+def crossentropy(output: jnp.ndarray, target: int):
+    return -jax.nn.log_softmax(output)[target]
+
+
+def seq_crossentropy(output: jnp.ndarray, targets: jnp.ndarray):
+    return vmap(crossentropy)(output, targets).mean()
+
+
 def transformer_loss(cfg, params, x):
     """
     # Transformer loss for one example
@@ -244,27 +220,8 @@ def transformer_loss(cfg, params, x):
     return seq_crossentropy(output[:-1], x[1:])
 
 
-def crossentropy(output: jnp.ndarray, target: int):
-    return -jax.nn.log_softmax(output)[target]
-
-
-def seq_crossentropy(output: jnp.ndarray, targets: jnp.ndarray):
-    return vmap(crossentropy)(output, targets).mean()
-
-
-def loss(cfg, params, x):
-    output = transformer(cfg, params, x)
-    xent = vmap(crossentropy)(output[:-1], x[1:])
-    return xent.mean()
-
-
-def loss_batch(cfg, params, seq):
-    batched = vmap(loss, in_axes=(None, None, 0), out_axes=0)
-    return jnp.mean(batched(cfg, params, seq))
-
-
 # We don't jit this, as the loop will unroll, and take a long time to compile
-def transformer_sample_unjit(cfg, params, seq: jnp.ndarray, length: int = 20):
+def transformer_sample(cfg, params, seq: jnp.ndarray, length: int = 20):
 
     for _i in range(length):
         output = transformer(cfg, params, seq)

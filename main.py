@@ -31,8 +31,6 @@ np.set_printoptions(threshold=20, edgeitems=3, linewidth=2048, precision=3)
 # Noisily fail when arrays are the wrong size
 config.update("jax_numpy_rank_promotion", "raise")
 
-sample = transformer_sample_unjit
-
 LOGLEVEL = os.environ.get("LOGLEVEL", "INFO").upper()
 logger = logging.getLogger("pure-tranfomer")
 logger.setLevel(level=LOGLEVEL)
@@ -184,7 +182,9 @@ def main():
         # Log a sample after each epoch
         prompt = [dataset.stoi[c] for c in "Au"]
         with timer("sample"):
-            sampled = sample(cfg, params, jnp.array(prompt), length=20 + epoch)
+            sampled = transformer_sample(
+                cfg, params, jnp.array(prompt), length=20 + epoch
+            )
             print(loss, tostr(prompt) + "|" + tostr(sampled[len(prompt) :]))
 
     # Grab Current Time After Running the Code
