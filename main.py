@@ -12,6 +12,7 @@ import logging
 
 import jax
 import jax.numpy as jnp
+from jax.config import config
 import numpy as np
 
 from functools import partial
@@ -28,15 +29,9 @@ jnp.set_printoptions(threshold=20, edgeitems=3, linewidth=2048, precision=3)
 np.set_printoptions(threshold=20, edgeitems=3, linewidth=2048, precision=3)
 
 # Noisily fail when arrays are the wrong size
-from jax.config import config
-
 config.update("jax_numpy_rank_promotion", "raise")
 
-jit_sampler = Arg("jit-sampler", False)
 sample = transformer_sample_unjit
-if jit_sampler.peek():
-    sample = jax.jit(sample, static_argnums=(0,))
-
 
 LOGLEVEL = os.environ.get("LOGLEVEL", "INFO").upper()
 logger = logging.getLogger("pure-tranfomer")
@@ -77,7 +72,8 @@ def main():
         print("Quick mode, disabling wandb")
         wandb.init(mode="disabled")
         epochs.default = 2
-        # Choose primes, to catch any size mismatches
+        batches.default = 10
+        # Sizes are prime numbers, to catch any mismatches
         d_model.default = 93
         d_k.default = 13
         heads.default = 7
@@ -86,7 +82,8 @@ def main():
     start = time.time()
 
     # Create PRNG key
-    rnd_key = jax.random.PRNGKey(0)
+    rnd_key = jax.random.PRNGKey(42)
+
     # Create dataset
     dataset = TinyShakespeare(rnd_key, seq_len=seq_len(), batch_size=batch_size())
     tostr = lambda x: "".join([dataset.itos[i] for i in x]).replace("\n", "\\n")
@@ -106,7 +103,7 @@ def main():
     assert len(names) == len(jax.tree_flatten(params)[0])
 
     # gnorms_table = wandb.Table(columns=names)
-    # wandb.log({'gnorms_table': gnorms_table})
+    # wandb.log({"gnorms_table": gnorms_table})
 
     sizes = jax.tree_map(lambda v: np.prod(v.shape), params)
     sizes.print("sizes:")
@@ -140,36 +137,39 @@ def main():
 
     optimizer = Adam(params, lr=lr(), betas=(beta1(), beta2()))
 
-    for _epoch in range(epochs()):
+    gnorms_all = np.zeros((len(names), 0))
+    for epoch in range(epochs()):
 
         # Iterate through batches
-        for i, data in enumerate(islice(dataset, sys.maxsize if save() else 10)):
+        for i, data in enumerate(islice(dataset, batches())):
             # Compute and log the loss
             loss = loss_batch(cfg, params, data)
 
             # Get the gradients
             grads = grad_loss_batch(cfg, params, data)
 
-            # gnorms = jax.tree_map(lambda v:np.round(np.log((jnp.linalg.norm(v)))), grads)
-            # if i == 0:
-            #     gnorms.print('gnorms:')
+            gnorms = jax.tree_map(lambda v: np.log10((np.linalg.norm(v))), grads)
 
-            # gnorms,_ = jax.tree_flatten(gnorms)
-            # gnorms_table.add_data(*gnorms)
-            # plt.plot(gnorms)
-            # plt.ylabel("gnorms")
+            gnorms_all = np.hstack(
+                (gnorms_all, np.array(jax.tree_leaves(gnorms), ndmin=2).T)
+            )
 
             print(
                 wandb.run.name,
                 "loss",
                 loss,
                 "sample",
-                tostr(data[np.random.randint(0, len(data))]),
+                tostr(data[0]),
             )  # , 'gnorms', gnorms)
             total_time = time.time() - start
 
             wandb.log(
-                {"time": total_time, "batch": i, "loss": loss}
+                {
+                    "time": total_time,
+                    "batch": i,
+                    "loss": loss,
+                    "gnorms": wandb.Image(gnorms_all, caption="Gradient norm"),
+                }
             )  # 'gnorms': plt,  'gnorms_table': gnorms_table})
 
             # Update parameters
@@ -182,8 +182,8 @@ def main():
         # Log a sample after each epoch
         prompt = [dataset.stoi[c] for c in "Au"]
         with timer("sample"):
-            sampled = sample(cfg, params, jnp.array(prompt))[len(prompt) :]
-            print(loss, tostr(prompt) + "|" + tostr(sampled))
+            sampled = sample(cfg, params, jnp.array(prompt), length=20 + epoch)
+            print(loss, tostr(prompt) + "|" + tostr(sampled[len(prompt) :]))
 
     # Grab Current Time After Running the Code
     end = time.time()

@@ -9,7 +9,7 @@ import jax
 from jax import vmap
 import jax.numpy as jnp
 
-import matplotlib.pyplot as plt
+from functools import partial
 
 import jax.experimental.host_callback
 
@@ -167,6 +167,7 @@ def transformer_init(
 
 # Format off for the size annotations
 # fmt: off
+@partial(jax.jit, static_argnums=0)
 def transformer(cfg, params, x: jnp.ndarray):
     """
     cfg: Config, from transformer_init, holds hyperparameters
@@ -262,9 +263,10 @@ def loss_batch(cfg, params, seq):
     return jnp.mean(batched(cfg, params, seq))
 
 
+# We don't jit this, as the loop will unroll, and take a long time to compile
 def transformer_sample_unjit(cfg, params, seq: jnp.ndarray, length: int = 20):
 
-    for i in range(length):
+    for _i in range(length):
         output = transformer(cfg, params, seq)
 
         idx = jnp.argmax(output[-1])
