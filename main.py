@@ -122,6 +122,10 @@ def main():
     grad_loss_batch_unjit = jax.grad(loss_batch, argnums=1)
     grad_loss_batch = jax.jit(grad_loss_batch_unjit, static_argnums=0)
 
+
+    value_and_grad_loss_batch_unjit = jax.value_and_grad(loss_batch, argnums=1)
+    value_and_grad_loss_batch = jax.jit(value_and_grad_loss_batch_unjit, static_argnums=0)
+
     matches = re.search("--xla_dump_to=([^ ]+)", os.environ.get("XLA_FLAGS") or "")
     if matches:
         fn = matches[1] + "/grad_loss_batch.jaxpr.py"
@@ -144,11 +148,8 @@ def main():
 
         # Iterate through batches
         for i, data in enumerate(islice(dataset, sys.maxsize if save() else 10)):
-            # Compute and log the loss
-            loss = loss_batch(cfg, params, data)
-
-            # Get the gradients
-            grads = grad_loss_batch(cfg, params, data)
+            # Get loss and gradients 
+            loss, grads = value_and_grad_loss_batch(cfg, params, data)
 
             # gnorms = jax.tree_map(lambda v:np.round(np.log((jnp.linalg.norm(v)))), grads)
             # if i == 0:
