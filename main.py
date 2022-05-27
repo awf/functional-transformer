@@ -69,7 +69,7 @@ def main():
     if save():
         wandb.init(project="pure-transformer", entity="awfidius", config=Arg.config())
     else:
-        print("Quick mode, disabling wandb")
+        print("Quick mode, disabling wandb, using small prime sizes")
         wandb.init(mode="disabled")
         epochs.default = 2
         batches.default = 10
