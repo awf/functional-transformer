@@ -16,6 +16,7 @@ import jax.nn as jnn
 import numpy as np
 from jax import vmap
 
+import copy
 from functools import partial
 from itertools import islice
 
@@ -36,7 +37,7 @@ config.update("jax_numpy_rank_promotion", "raise")
 LOGLEVEL = os.environ.get("LOGLEVEL", "INFO").upper()
 logger = logging.getLogger("pure-tranfomer")
 logger.setLevel(level=LOGLEVEL)
-timer = timer.get_timer(logging.WARNING)
+timer = timer.get_timer(logging.INFO)
 db = logger.debug
 
 # ---------------------------------------------
@@ -97,21 +98,35 @@ def cnn(cfg, rng, params, x):  # x : W x H
 
 def cnn_loss(cfg, rng, params, x, l):
     y = cnn(cfg, rng, params, x)
-    return -jax.nn.log_softmax(y)[l]
+    return -jax.nn.log_softmax(cfg.tau * y)[l]
+
+
+dropout_keep_prob = Arg("dropout", 0.5, "Dropout keep prob")
 
 
 def cnn_init(rng):
     params = ParamsDict()
-    rng, params.layer1 = rand(rng, jax.random.uniform, (3, 3, 32))
-    rng, params.layer2 = rand(rng, jax.random.uniform, (3, 3, 32, 64))
-    rng, params.dense = rand(rng, jax.random.uniform, (5 * 5 * 64, 10))
+    s = 1 / 9
+    rng, params.layer1 = rand(rng, jax.random.uniform, (3, 3, 32), minval=-s, maxval=s)
+    rng, params.layer2 = rand(
+        rng, jax.random.uniform, (3, 3, 32, 64), minval=-s, maxval=s
+    )
+    rng, params.dense = rand(
+        rng, jax.random.uniform, (5 * 5 * 64, 10), minval=-0.001, maxval=0.001
+    )
     # How to automate this size computation?
 
     cfg = ParamsDict()
     cfg.maxpool_window = (2, 2)
-    cfg.dropout_keep_prob = 0.5
-    cfg.tau = 1.0
+    cfg.dropout_keep_prob = dropout_keep_prob()
+    cfg.tau = 1
     return rng, cfg, params
+
+
+@partial(jax.jit, static_argnames="cfg")
+def cnn_batched(cfg, rng, params, x):
+    f = partial(cnn, cfg, rng, params)
+    return vmap(f)(x)
 
 
 def main():
@@ -123,27 +138,20 @@ def main():
     epochs = Arg("epochs", 32)
 
     # Init the model params
-    dropout_keep_prob = Arg("dropout", 8, "Dropout keep prob")
 
-    # save = Arg("save", "", "Save mode.  Log run to wandb, lengthen epochs and batches")
+    save = Arg("save", "", "Save mode.  Log run to wandb, lengthen epochs and batches")
 
-    # if save():
-    #     wandb.init(
-    #         project="pure-transformer",
-    #         entity="awfidius",
-    #         name=save() if len(save()) else None,
-    #         config=Arg.config(),
-    #     )
-    # else:
-    #     print("Quick mode, disabling wandb, using small prime sizes")
-    #     wandb.init(mode="disabled")
-    #     epochs.default = 2
-    #     batches.default = 10
-    #     # Sizes are prime numbers, to catch any mismatches
-    #     d_model.default = 93
-    #     d_k.default = 13
-    #     heads.default = 7
-    #     d_ff.default = 111
+    if save():
+        wandb.init(
+            project="pure-convnet",
+            entity="awfidius",
+            name=save() if len(save()) else None,
+            config=Arg.config(),
+        )
+    else:
+        print("Quick mode, disabling wandb, using small prime sizes")
+        wandb.init(mode="disabled")
+        epochs.default = 2
 
     # Create PRNG key
     rnd_key = jax.random.PRNGKey(42)
@@ -154,19 +162,25 @@ def main():
         train_l = f["train_l"]
         val_x = f["val_x"]
         val_l = f["val_l"]
-        test_x = f["test_x"]
-        test_l = f["test_l"]
+        # test_x = f["test_x"]
+        # test_l = f["test_l"]
 
     rnd_key, cfg, params = cnn_init(rnd_key)
 
+    cfg_inference = copy.deepcopy(cfg)
+    cfg_inference.dropout_keep_prob = 1.0
+
+    ic(cfg, cfg_inference)
+
     @partial(jax.jit, static_argnums=0)
     def loss_batch(cfg, rng, params, seq_x, seq_l):
-        batched = vmap(cnn_loss, in_axes=(None, None, None, 0, 0), out_axes=0)
-        return jnp.mean(batched(cfg, rng, params, seq_x, seq_l))
+        f = partial(cnn_loss, cfg, rng, params)
+        y = vmap(f)(seq_x, seq_l)
+        return jnp.mean(y)
 
     value_and_grad_loss_batch_unjit = jax.value_and_grad(loss_batch, argnums=2)
     value_and_grad_loss_batch = jax.jit(
-        value_and_grad_loss_batch_unjit, static_argnums=0
+        value_and_grad_loss_batch_unjit, static_argnames="cfg"
     )
 
     optimizer = Adam(params, lr=lr(), betas=(beta1(), beta2()))
@@ -178,24 +192,34 @@ def main():
             data_x = train_x[i : i + batch_size()]
             data_l = train_l[i : i + batch_size()]
 
-            # Get loss and gradients
-            rnd_key, rng = jax.random.split(rnd_key)
-            loss, grads = value_and_grad_loss_batch(cfg, rng, params, data_x, data_l)
+            with timer("update") as t:
+                # Get loss and gradients
+                rnd_key, rng = jax.random.split(rnd_key)
+                loss, grads = value_and_grad_loss_batch(
+                    cfg, rng, params, data_x, data_l
+                )
 
-            print(
-                wandb.run.name,
-                "loss",
-                loss,
+                print(f"Batch loss={loss:6.4f}, timer={t.elapse}")
+
+            if i % 5 == 0:
+                with timer("stats"):
+                    pred_y = cnn_batched(cfg_inference, rng, params, val_x)
+                    pred_l = jnp.argmax(pred_y, axis=1)
+                    val_num_correct = np.count_nonzero(pred_l == val_l)
+                    val_error = 100 - val_num_correct / len(val_l) * 100
+                    val_loss = loss_batch(cfg_inference, rng, params, val_x, val_l)
+                print(
+                    f"Validation loss/acc: {val_loss:6.4f}/{val_error:.1f}, timer={t.elapse}"
+                )
+
+            wandb.log(
+                {
+                    "batch": i,
+                    "loss": loss,
+                    "val_error": val_error,
+                    "gradnorms": [map(jnp.linalg.norm, jax.tree_leaves(params))],
+                }
             )
-
-            # wandb.log(
-            #     {
-            #         "time": total_time,
-            #         "batch": i,
-            #         "loss": loss,
-            #         # "gnorms": wandb.Image(gnorms_all, caption="Parameter norm"),
-            #     }
-            # )  # 'gnorms': plt,  'gnorms_table': gnorms_table})
 
             params = optimizer.step(params, grads)
 
