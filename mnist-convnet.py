@@ -1,6 +1,8 @@
 """
 Pure-from-the-ground-up mnist convnet, based on
 """
+import matplotlib.pylab as plt
+import numpy as np
 
 from timer import timer
 
@@ -28,6 +30,7 @@ from jaxutils.ParamsDict import ParamsDict
 from jaxutils.Arg import Arg
 from jaxutils.rand import rand
 from jaxutils.Adam import Adam
+
 
 # Noisily fail when arrays are the wrong size
 from jax.config import config
@@ -106,7 +109,7 @@ dropout_keep_prob = Arg("dropout", 0.5, "Dropout keep prob")
 
 def cnn_init(rng):
     params = ParamsDict()
-    s = 1 / 9
+    s = 0.5
     rng, params.layer1 = rand(rng, jax.random.uniform, (3, 3, 32), minval=-s, maxval=s)
     rng, params.layer2 = rand(
         rng, jax.random.uniform, (3, 3, 32, 64), minval=-s, maxval=s
@@ -127,6 +130,10 @@ def cnn_init(rng):
 def cnn_batched(cfg, rng, params, x):
     f = partial(cnn, cfg, rng, params)
     return vmap(f)(x)
+
+
+print("Loaded")
+# %%
 
 
 def main():
@@ -157,15 +164,26 @@ def main():
     rnd_key = jax.random.PRNGKey(42)
 
     # Create dataset
+    # wget https://storage.googleapis.com/tensorflow/tf-keras-datasets/mnist.npz
     with np.load("mnist.npz") as f:
-        train_x = f["train_x"]
-        train_l = f["train_l"]
-        val_x = f["val_x"]
-        val_l = f["val_l"]
-        # test_x = f["test_x"]
-        # test_l = f["test_l"]
+        train_and_val_x = f["x_train"]
+        train_and_val_l = f["y_train"]
+
+    train_x = train_and_val_x[:50000]
+    train_l = train_and_val_l[:50000]
+
+    val_x = train_and_val_x[50000:]
+    val_l = train_and_val_l[50000:]
+    val_l_inds = np.argsort(val_l)
+
+    # test_x = f["test_x"]
+    # test_l = f["test_l"]
 
     rnd_key, cfg, params = cnn_init(rnd_key)
+
+    sizes = jax.tree_map(lambda v: np.prod(v.shape), params)
+    sizes.print("sizes:")
+    print("Total parameter count:", np.sum(jax.tree_flatten(sizes)[0]))
 
     cfg_inference = copy.deepcopy(cfg)
     cfg_inference.dropout_keep_prob = 1.0
@@ -183,6 +201,11 @@ def main():
         value_and_grad_loss_batch_unjit, static_argnames="cfg"
     )
 
+    np.set_printoptions(precision=3)
+
+    def amap(f, xs):
+        return np.array(list(map(f, xs)))
+
     optimizer = Adam(params, lr=lr(), betas=(beta1(), beta2()))
 
     for epoch in range(epochs()):
@@ -192,34 +215,35 @@ def main():
             data_x = train_x[i : i + batch_size()]
             data_l = train_l[i : i + batch_size()]
 
-            with timer("update") as t:
-                # Get loss and gradients
-                rnd_key, rng = jax.random.split(rnd_key)
-                loss, grads = value_and_grad_loss_batch(
-                    cfg, rng, params, data_x, data_l
-                )
+            # Get loss and gradients
+            rnd_key, rng = jax.random.split(rnd_key)
+            loss, grads = value_and_grad_loss_batch(cfg, rng, params, data_x, data_l)
 
-                print(f"Batch loss={loss:6.4f}, timer={t.elapse}")
+            if i % 10 == 0:
+                pred_y = cnn_batched(cfg_inference, rng, params, val_x)
+                pred_l = jnp.argmax(pred_y, axis=1)
 
-            if i % 5 == 0:
-                with timer("stats"):
-                    pred_y = cnn_batched(cfg_inference, rng, params, val_x)
-                    pred_l = jnp.argmax(pred_y, axis=1)
-                    val_num_correct = np.count_nonzero(pred_l == val_l)
-                    val_error = 100 - val_num_correct / len(val_l) * 100
-                    val_loss = loss_batch(cfg_inference, rng, params, val_x, val_l)
+                val_num_correct = np.count_nonzero(pred_l == val_l)
+                val_error = 100 - val_num_correct / len(val_l) * 100
+                val_loss = loss_batch(cfg_inference, rng, params, val_x, val_l)
                 print(
-                    f"Validation loss/acc: {val_loss:6.4f}/{val_error:.1f}, timer={t.elapse}"
+                    f"Validation loss/acc: {val_loss:6.4f}/{val_error:.1f}, N={amap(jnp.linalg.norm, jax.tree_leaves(params))}"
                 )
 
-            wandb.log(
-                {
-                    "batch": i,
-                    "loss": loss,
-                    "val_error": val_error,
-                    "gradnorms": [map(jnp.linalg.norm, jax.tree_leaves(params))],
-                }
-            )
+                preds_inds = range(0, len(val_l), len(val_l) // 300)
+                wandb.log(
+                    {
+                        "batch": i,
+                        "loss": loss,
+                        "val_error": val_error,
+                        # "gradnorms": list(map(jnp.linalg.norm, jax.tree_leaves(params))),
+                        # "preds": wandb.Image(
+                        #     -np.array(pred_y[val_l_inds[preds_inds], :].T)
+                        # ),
+                    }
+                )
+            # else:
+            # wandb.log({"batch": i,"loss": loss}}
 
             params = optimizer.step(params, grads)
 
@@ -249,3 +273,5 @@ def test_maxpool():
 
 if __name__ == "__main__":
     main()
+
+# %%
