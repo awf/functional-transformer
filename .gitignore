@@ -4,3 +4,4 @@ wandb
 xla-dumps
 
 *.pyc
+mnist.npz
