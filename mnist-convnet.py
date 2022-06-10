@@ -77,31 +77,30 @@ def conv(x, k):
 def cnn(cfg, rng, params, x):  # x : W x H
     maxpool_axis2 = vmap(maxpool, in_axes=(2, None), out_axes=2)
 
-    x = vmap(conv, in_axes=(None, 2), out_axes=2)(x, params.layer1)  # W1 x H1 x C
+    x = vmap(conv, in_axes=(None, 2), out_axes=2)(x, params.layer1)
 
     x = jnn.relu(x)
-    x = maxpool_axis2(x, cfg.maxpool_window)        # W2 x H2 x C       W2 = W1 // 2
+    x = maxpool_axis2(x, cfg.maxpool_window)
     
-    ic(x.shape)
-    x = vmap(conv, in_axes=(None, 3), out_axes=2)(x, params.layer2)                # W3 x H3
+    x = vmap(conv, in_axes=(None, 3), out_axes=2)(x, params.layer2)
+    x = jnn.relu(x)
 
     x = jnp.squeeze(x, axis=3)
-
-    x = jnn.relu(x)
-
-    ic(x.shape)
     x = maxpool_axis2(x, cfg.maxpool_window)
-    ic(x.shape)
-    
     x = dropout(rng, cfg.dropout_keep_prob, x)
-    x = x.flatten() @ params.dense
-    return x
+
+    x = x.flatten()
+    x = x @ params.dense1
+    x = jnn.relu(x)
+    x = x @ params.dense2
+    assert x.shape == (10,)
+    return x * cfg.tau
 # fmt:on
 
 
 def cnn_loss(cfg, rng, params, x, l):
     y = cnn(cfg, rng, params, x)
-    return -jax.nn.log_softmax(cfg.tau * y)[l]
+    return -jax.nn.log_softmax(y)[l]
 
 
 dropout_keep_prob = Arg("dropout", 0.5, "Dropout keep prob")
@@ -109,20 +108,23 @@ dropout_keep_prob = Arg("dropout", 0.5, "Dropout keep prob")
 
 def cnn_init(rng):
     params = ParamsDict()
-    s = 0.5
-    rng, params.layer1 = rand(rng, jax.random.uniform, (3, 3, 32), minval=-s, maxval=s)
+    rng, params.layer1 = rand(
+        rng, jax.random.uniform, (3, 3, 32), minval=-0.5, maxval=0.5
+    )
     rng, params.layer2 = rand(
-        rng, jax.random.uniform, (3, 3, 32, 64), minval=-s, maxval=s
+        rng, jax.random.uniform, (3, 3, 32, 64), minval=-0.5, maxval=0.5
     )
-    rng, params.dense = rand(
-        rng, jax.random.uniform, (5 * 5 * 64, 10), minval=-0.001, maxval=0.001
+    s = 1 / (5 * 5 * 64)
+    H = 128
+    rng, params.dense1 = rand(
+        rng, jax.random.uniform, (5 * 5 * 64, H), minval=-s, maxval=s
     )
-    # How to automate this size computation?
+    rng, params.dense2 = rand(rng, jax.random.uniform, (H, 10), minval=-s, maxval=s)
 
     cfg = ParamsDict()
     cfg.maxpool_window = (2, 2)
     cfg.dropout_keep_prob = dropout_keep_prob()
-    cfg.tau = 1
+    cfg.tau = 0.01
     return rng, cfg, params
 
 
@@ -166,8 +168,12 @@ def main():
     # Create dataset
     # wget https://storage.googleapis.com/tensorflow/tf-keras-datasets/mnist.npz
     with np.load("mnist.npz") as f:
-        train_and_val_x = f["x_train"]
+        scale = 1 / 256
+        train_and_val_x = f["x_train"] * scale
         train_and_val_l = f["y_train"]
+
+        # test_x = f["x_test"] * scale
+        # test_l = f["y_test"]
 
     train_x = train_and_val_x[:50000]
     train_l = train_and_val_l[:50000]
@@ -175,9 +181,6 @@ def main():
     val_x = train_and_val_x[50000:]
     val_l = train_and_val_l[50000:]
     val_l_inds = np.argsort(val_l)
-
-    # test_x = f["test_x"]
-    # test_l = f["test_l"]
 
     rnd_key, cfg, params = cnn_init(rnd_key)
 
@@ -227,7 +230,10 @@ def main():
                 val_error = 100 - val_num_correct / len(val_l) * 100
                 val_loss = loss_batch(cfg_inference, rng, params, val_x, val_l)
                 print(
-                    f"Validation loss/acc: {val_loss:6.4f}/{val_error:.1f}, N={amap(jnp.linalg.norm, jax.tree_leaves(params))}"
+                    f"Validation loss/acc: {val_loss:6.4f}/{val_error:.2f}"
+                    + f", N={amap(jnp.linalg.norm, jax.tree_leaves(params))}"
+                    + f", logits={amap(jnp.linalg.norm, pred_y.T).shape}"
+                    + f", logits={amap(jnp.linalg.norm, pred_y.T)}"
                 )
 
                 preds_inds = range(0, len(val_l), len(val_l) // 300)
