@@ -16,7 +16,7 @@ import jax
 import jax.numpy as jnp
 import jax.nn as jnn
 import numpy as np
-from jax import vmap
+from jax import jit, vmap
 
 import copy
 from functools import partial
@@ -90,11 +90,12 @@ def cnn(cfg, rng, params, x):  # x : W x H
     x = dropout(rng, cfg.dropout_keep_prob, x)
 
     x = x.flatten()
-    x = x @ params.dense1
-    x = jnn.relu(x)
-    x = x @ params.dense2
+    x = x @ params.dense[0]
+    for A in params.dense[1:]:
+        x = jnn.relu(x)
+        x = x @ A
     assert x.shape == (10,)
-    return x * cfg.tau
+    return x * params.tau
 # fmt:on
 
 
@@ -104,6 +105,7 @@ def cnn_loss(cfg, rng, params, x, l):
 
 
 dropout_keep_prob = Arg("dropout", 0.5, "Dropout keep prob")
+layers = Arg("dense-layers", [], "Hidden sizes between dense layers.", dtype=int)
 
 
 def cnn_init(rng):
@@ -114,17 +116,23 @@ def cnn_init(rng):
     rng, params.layer2 = rand(
         rng, jax.random.uniform, (3, 3, 32, 64), minval=-0.5, maxval=0.5
     )
-    s = 1 / (5 * 5 * 64)
-    H = 128
-    rng, params.dense1 = rand(
-        rng, jax.random.uniform, (5 * 5 * 64, H), minval=-s, maxval=s
-    )
-    rng, params.dense2 = rand(rng, jax.random.uniform, (H, 10), minval=-s, maxval=s)
+    layer_in_dim = 5 * 5 * 64
+    ic(layers())
+    layer_out_dims = layers() + [10]
+    ic(layer_out_dims)
+    params.dense = []
+    for h_dim in layer_out_dims:
+        rng, A = rand(
+            rng, jax.random.uniform, (layer_in_dim, h_dim), minval=-0.5, maxval=0.5
+        )
+        params.dense += [A]
+        layer_in_dim = h_dim
+    params.tau = jnp.array(1.0)
 
     cfg = ParamsDict()
     cfg.maxpool_window = (2, 2)
     cfg.dropout_keep_prob = dropout_keep_prob()
-    cfg.tau = 0.01
+    # cfg.tau = 0.01
     return rng, cfg, params
 
 
@@ -138,6 +146,24 @@ print("Loaded")
 # %%
 
 
+def amap(f, xs):
+    return np.array(list(map(f, xs)))
+
+
+def tree_axpy(a, x, y):
+    return jax.tree_map(lambda x, y: a * x + y, x, y)
+
+
+def renormalize(params):
+    norms = jax.tree_map(lambda x: jnp.linalg.norm(x), params)
+    params = jax.tree_map(lambda x, n: x / n, params, norms)
+    np.testing.assert_almost_equal(
+        params.tau, 1.0
+    )  # tau got normalized, but is still in norms
+    params.tau = np.prod(jax.tree_leaves(norms))
+    return params
+
+
 def main():
 
     lr = Arg(flag="lr", doc="Learning rate", default=0.001)
@@ -145,10 +171,13 @@ def main():
     beta2 = Arg(flag="beta2", doc="Adam beta2", default=0.99)
     batch_size = Arg(flag="batch-size", doc="Batch size", default=128)
     epochs = Arg("epochs", 32)
-
-    # Init the model params
-
+    renorm = Arg("renorm", False, "Renormalize all weights after update")
     save = Arg("save", "", "Save mode.  Log run to wandb, lengthen epochs and batches")
+    sgd = Arg("sgd", False)
+    lossplot = Arg("lossplot", False)
+    onebit = Arg("1bit", False)
+
+    print(Arg.str())
 
     if save():
         wandb.init(
@@ -183,10 +212,15 @@ def main():
     val_l_inds = np.argsort(val_l)
 
     rnd_key, cfg, params = cnn_init(rnd_key)
+    if renorm():
+        params = renormalize(params)
 
-    sizes = jax.tree_map(lambda v: np.prod(v.shape), params)
+    sizes = jax.tree_map(lambda v: f"{v.shape}, {np.prod(v.shape)}", params)
     sizes.print("sizes:")
-    print("Total parameter count:", np.sum(jax.tree_flatten(sizes)[0]))
+    print(
+        "Total parameter count:",
+        np.sum(amap(lambda x: np.prod(x.shape), jax.tree_flatten(params)[0])),
+    )
 
     cfg_inference = copy.deepcopy(cfg)
     cfg_inference.dropout_keep_prob = 1.0
@@ -205,9 +239,6 @@ def main():
     )
 
     np.set_printoptions(precision=3)
-
-    def amap(f, xs):
-        return np.array(list(map(f, xs)))
 
     optimizer = Adam(params, lr=lr(), betas=(beta1(), beta2()))
 
@@ -231,10 +262,20 @@ def main():
                 val_loss = loss_batch(cfg_inference, rng, params, val_x, val_l)
                 print(
                     f"Validation loss/acc: {val_loss:6.4f}/{val_error:.2f}"
-                    + f", N={amap(jnp.linalg.norm, jax.tree_leaves(params))}"
-                    + f", logits={amap(jnp.linalg.norm, pred_y.T).shape}"
-                    + f", logits={amap(jnp.linalg.norm, pred_y.T)}"
+                    # + f", N={amap(jnp.linalg.norm, jax.tree_leaves(params))}"
+                    + f", tau={params.tau}"
+                    + f", GN={amap(jnp.linalg.norm, jax.tree_leaves(grads))}"
+                    + f", logits={pred_y[17]}"
                 )
+
+                if lossplot() and (i % 100) == 0:
+                    print("Generating lossplot")
+                    deltas = np.linspace(-0.1, 10.1, 100) * -lr()
+                    y = np.zeros_like(deltas)
+                    for i, delta in enumerate(deltas):
+                        p = tree_axpy(delta, grads, params)
+                        y[i] = loss_batch(cfg_inference, rng, p, val_x, val_l)
+                    print("done")
 
                 preds_inds = range(0, len(val_l), len(val_l) // 300)
                 wandb.log(
@@ -242,16 +283,31 @@ def main():
                         "batch": i,
                         "loss": loss,
                         "val_error": val_error,
+                        "tau": params.tau
                         # "gradnorms": list(map(jnp.linalg.norm, jax.tree_leaves(params))),
                         # "preds": wandb.Image(
                         #     -np.array(pred_y[val_l_inds[preds_inds], :].T)
                         # ),
                     }
                 )
-            # else:
-            # wandb.log({"batch": i,"loss": loss}}
 
-            params = optimizer.step(params, grads)
+            if onebit():
+                grads = jax.tree_map(jnp.sign, grads)
+
+            if sgd():
+                params = jax.tree_map(lambda p, g: p - lr() * g, params, grads)
+            else:
+                params = optimizer.step(params, grads)
+
+            if renorm():
+                pred_y = cnn_batched(cfg_inference, rng, params, data_x)
+                params = renormalize(params)
+                pred_y2 = cnn_batched(cfg_inference, rng, params, data_x)
+                np.testing.assert_allclose(
+                    pred_y, pred_y2, atol=1e-4 * params.tau, rtol=0
+                )
+                if params.tau > 1e6:
+                    params.tau = np.array([1e6])
 
 
 def test_maxpool():
