@@ -7,6 +7,8 @@ import numpy as np
 from timer import timer
 
 import time
+import types
+from typing import Any
 import re
 import sys
 import os
@@ -36,9 +38,10 @@ from jaxutils.Adam import Adam
 from jax.config import config
 
 config.update("jax_numpy_rank_promotion", "raise")
+config.update("jax_debug_nans", True)
 
 LOGLEVEL = os.environ.get("LOGLEVEL", "INFO").upper()
-logger = logging.getLogger("pure-tranfomer")
+logger = logging.getLogger("functional-transfomer")
 logger.setLevel(level=LOGLEVEL)
 timer = timer.get_timer(logging.INFO)
 db = logger.debug
@@ -73,7 +76,10 @@ def conv(x, k):
     return jax.scipy.signal.convolve(x, k, mode="valid")
 
 
-# fmt: off
+def repeat(x, repeats):
+    return jnp.repeat(x, repeats)
+
+
 def cnn(cfg, rng, params, x):  # x : W x H
     maxpool_axis2 = vmap(maxpool, in_axes=(2, None), out_axes=2)
 
@@ -81,7 +87,7 @@ def cnn(cfg, rng, params, x):  # x : W x H
 
     x = jnn.relu(x)
     x = maxpool_axis2(x, cfg.maxpool_window)
-    
+
     x = vmap(conv, in_axes=(None, 3), out_axes=2)(x, params.layer2)
     x = jnn.relu(x)
 
@@ -96,12 +102,17 @@ def cnn(cfg, rng, params, x):  # x : W x H
         x = x @ A
     assert x.shape == (10,)
     return x * params.tau
-# fmt:on
+
+
+l2loss = Arg("l2loss", False, "Use L2 loss")
 
 
 def cnn_loss(cfg, rng, params, x, l):
     y = cnn(cfg, rng, params, x)
-    return -jax.nn.log_softmax(y)[l]
+    if l2loss():
+        return jnp.linalg.norm(y - jnn.one_hot(l, 10)) ** 2
+    else:
+        return -jax.nn.log_softmax(y)[l]
 
 
 dropout_keep_prob = Arg("dropout", 0.5, "Dropout keep prob")
@@ -154,13 +165,20 @@ def tree_axpy(a, x, y):
     return jax.tree_map(lambda x, y: a * x + y, x, y)
 
 
+PyTree = Any
+
+
+def tree_axpby(a: float, x: PyTree, b: float, y: PyTree):
+    return jax.tree_map(lambda x, y: a * x + b * y, x, y)
+
+
 def renormalize(params):
     norms = jax.tree_map(lambda x: jnp.linalg.norm(x), params)
     params = jax.tree_map(lambda x, n: x / n, params, norms)
-    np.testing.assert_almost_equal(
-        params.tau, 1.0
-    )  # tau got normalized, but is still in norms
-    params.tau = np.prod(jax.tree_leaves(norms))
+    # np.testing.assert_almost_equal(
+    #     params.tau, 1.0
+    # )  # tau got normalized, but is still in norms
+    params.tau = jnp.prod(jnp.array(jax.tree_leaves(norms)))
     return params
 
 
@@ -173,9 +191,18 @@ def main():
     epochs = Arg("epochs", 32)
     renorm = Arg("renorm", False, "Renormalize all weights after update")
     save = Arg("save", "", "Save mode.  Log run to wandb, lengthen epochs and batches")
-    sgd = Arg("sgd", False)
+    opt = Arg("opt", "adam", "Optimizer", choices=("sgd", "adam", "litelm"))
     lossplot = Arg("lossplot", False)
+    tau = Arg("tau", 100.0)
     onebit = Arg("1bit", False)
+    scale_invariant_loss = Arg(
+        "scale-invariant", False, "loss(params) == loss(lambda * params)"
+    )
+    random_labels = Arg(
+        "random-labels",
+        False,
+        "Initialise to random labels.  Should move from 97% error to 90%.",
+    )
 
     print(Arg.str())
 
@@ -191,10 +218,7 @@ def main():
         wandb.init(mode="disabled")
         epochs.default = 2
 
-    # Create PRNG key
-    rnd_key = jax.random.PRNGKey(42)
-
-    # Create dataset
+    ## Create dataset
     # wget https://storage.googleapis.com/tensorflow/tf-keras-datasets/mnist.npz
     with np.load("mnist.npz") as f:
         scale = 1 / 256
@@ -211,9 +235,14 @@ def main():
     val_l = train_and_val_l[50000:]
     val_l_inds = np.argsort(val_l)
 
+    ## Initialize parameters
+    # Create PRNG key
+    rnd_key = jax.random.PRNGKey(42)
+
     rnd_key, cfg, params = cnn_init(rnd_key)
-    if renorm():
-        params = renormalize(params)
+
+    params = renormalize(params)  # always do this - means all params init to -0.5..0.5
+    params.tau = np.array([tau()])
 
     sizes = jax.tree_map(lambda v: f"{v.shape}, {np.prod(v.shape)}", params)
     sizes.print("sizes:")
@@ -229,6 +258,8 @@ def main():
 
     @partial(jax.jit, static_argnums=0)
     def loss_batch(cfg, rng, params, seq_x, seq_l):
+        if scale_invariant_loss():
+            params = renormalize(params)
         f = partial(cnn_loss, cfg, rng, params)
         y = vmap(f)(seq_x, seq_l)
         return jnp.mean(y)
@@ -240,14 +271,30 @@ def main():
 
     np.set_printoptions(precision=3)
 
-    optimizer = Adam(params, lr=lr(), betas=(beta1(), beta2()))
+    #   params = jax.tree_map(lambda x: jnp.cast(x, np.float16), params)
+
+    optimizer = None
+    if opt() == "sgd":
+        pass
+    elif opt() == "litelm":
+        optimizer = ParamsDict()
+        optimizer.diagJtJ = jax.tree_map(lambda p: jnp.ones_like(p) * lr(), params)
+        optimizer.beta = beta2()
+        optimizer.lam = 1 / lr()
+
+    else:
+        assert opt() == "adam"
+        optimizer = Adam(params, lr=lr(), betas=(beta1(), beta2()))
 
     for epoch in range(epochs()):
 
         # Iterate through batches
+        last_loss = 0
         for i in range(0, len(train_x), batch_size()):
             data_x = train_x[i : i + batch_size()]
             data_l = train_l[i : i + batch_size()]
+            if random_labels():
+                data_l = np.random.randint(0, 10, data_l.shape)
 
             # Get loss and gradients
             rnd_key, rng = jax.random.split(rnd_key)
@@ -261,8 +308,8 @@ def main():
                 val_error = 100 - val_num_correct / len(val_l) * 100
                 val_loss = loss_batch(cfg_inference, rng, params, val_x, val_l)
                 print(
-                    f"Validation loss/acc: {val_loss:6.4f}/{val_error:.2f}"
-                    # + f", N={amap(jnp.linalg.norm, jax.tree_leaves(params))}"
+                    f"E{epoch} B{i//batch_size()} loss/acc: {val_loss:6.4f}/{val_error:.2f}"
+                    + f", N={amap(jnp.linalg.norm, jax.tree_leaves(params))}"
                     + f", tau={params.tau}"
                     + f", GN={amap(jnp.linalg.norm, jax.tree_leaves(grads))}"
                     + f", logits={pred_y[17]}"
@@ -283,7 +330,8 @@ def main():
                         "batch": i,
                         "loss": loss,
                         "val_error": val_error,
-                        "tau": params.tau
+                        "tau": params.tau,
+                        "lam": optimizer.lam
                         # "gradnorms": list(map(jnp.linalg.norm, jax.tree_leaves(params))),
                         # "preds": wandb.Image(
                         #     -np.array(pred_y[val_l_inds[preds_inds], :].T)
@@ -294,9 +342,33 @@ def main():
             if onebit():
                 grads = jax.tree_map(jnp.sign, grads)
 
-            if sgd():
+            if opt() == "sgd":
                 params = jax.tree_map(lambda p, g: p - lr() * g, params, grads)
+
+            elif opt() == "litelm":
+                grads_squared = jax.tree_map(jnp.square, grads)
+                optimizer.diagJtJ = tree_axpby(
+                    optimizer.beta, optimizer.diagJtJ, 1 - optimizer.beta, grads_squared
+                )
+                # LM : p -= (JtJ + L I) \ g
+                # vector: p = p - (g ./ (jtj + lam))
+                params = jax.tree_map(
+                    lambda p, jtj, g: p - g / (jtj + optimizer.lam),
+                    params,
+                    optimizer.diagJtJ,
+                    grads,
+                )
+
+                if loss > 1.01 * last_loss:
+                    # got worse, increase lam
+                    optimizer.lam *= 1.05
+                if loss < 0.99 * last_loss:
+                    # got better, decrease lam
+                    optimizer.lam /= 1.05
+
+                last_loss = loss
             else:
+                assert opt() == "adam"
                 params = optimizer.step(params, grads)
 
             if renorm():
