@@ -8,7 +8,7 @@ def linear(params, x: jnp.ndarray):
 def elementwise_linear(params, x: jnp.ndarray):
     return params.gain[None,:] * x + params.bias[None,:]
 
-def center(x, eps = 1e-5):
+def standardize(x, eps = 1e-5):
     return (x - x.mean())/(x.std() + eps)
 ```
 then the entire transformer forward computation is 25 lines of code (excerpt from `transformer.py`):
@@ -36,7 +36,7 @@ def transformer(cfg, params, x: jnp.ndarray):
     for layer in params.layers:
 
         # Layer-normalize embeddings
-        t1 = vmap(center)(embeddings)
+        t1 = vmap(standardize)(embeddings)
         t1 = elementwise_linear(layer.norm_self_attn, t1)   # L x Dm
 
         # Multi-head self-attention
@@ -56,7 +56,7 @@ def transformer(cfg, params, x: jnp.ndarray):
             embeddings += self_attn                         # L x Dm
 
         # Layer-normalize embeddings
-        t2 = vmap(center)(embeddings)
+        t2 = vmap(standardize)(embeddings)
         t2 = elementwise_linear(layer.norm_ff, t2)          # L x Dm
 
         # Feedforward fully connected
@@ -68,7 +68,7 @@ def transformer(cfg, params, x: jnp.ndarray):
         embeddings += t2
 
     # Layer-normalize embeddings
-    embeddings = vmap(center)(embeddings)
+    embeddings = vmap(standardize)(embeddings)
     embeddings = elementwise_linear(params.pre_output_norm, embeddings)
 
     # And linearly project to output dimension
