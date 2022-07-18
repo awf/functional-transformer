@@ -45,11 +45,12 @@ def transformer(cfg, params, x: jnp.ndarray):
             # Project into this head's query/key space
             query = linear(head.query, t1)                  # L x Dk
             key = linear(head.key, t1)                      # L x Dk
-            value = linear(head.value, t1)                  # L x Dm
 
+            # Compute L x L attention matrix
             score = query @ key.T + mask                    # L x L
             attn = jax.nn.softmax(cfg.tau * score, axis=1)  # L x L
 
+            value = linear(head.value, t1)                  # L x Dm
             self_attn = attn @ value                        # L x Dm
 
             # Add this head's contribution into embeddings

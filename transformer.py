@@ -66,7 +66,7 @@ def elementwise_linear(params, x: jnp.ndarray):
     return params.gain[None, :] * x + params.bias[None, :]
 
 
-def center(x, eps=1e-5):
+def standardize(x, eps=1e-5):
     return (x - x.mean()) / (x.std() + eps)
 
 
@@ -159,7 +159,7 @@ def transformer(cfg, params, x: jnp.ndarray):
     for layer in params.layers:
 
         # Layer-normalize embeddings
-        t1 = vmap(center)(embeddings)
+        t1 = vmap(standardize)(embeddings)
         t1 = elementwise_linear(layer.norm_self_attn, t1)   # L x Dm
 
         # Multi-head self-attention
@@ -168,18 +168,19 @@ def transformer(cfg, params, x: jnp.ndarray):
             # Project into this head's query/key space
             query = linear(head.query, t1)                  # L x Dk
             key = linear(head.key, t1)                      # L x Dk
-            value = linear(head.value, t1)                  # L x Dm
 
+            # Compute L x L attention matrix
             score = query @ key.T + mask                    # L x L
             attn = jax.nn.softmax(cfg.tau * score, axis=1)  # L x L
 
+            value = linear(head.value, t1)                  # L x Dm
             self_attn = attn @ value                        # L x Dm
 
             # Add this head's contribution into embeddings
             embeddings += self_attn                         # L x Dm
 
         # Layer-normalize embeddings
-        t2 = vmap(center)(embeddings)
+        t2 = vmap(standardize)(embeddings)
         t2 = elementwise_linear(layer.norm_ff, t2)          # L x Dm
 
         # Feedforward fully connected
@@ -191,7 +192,7 @@ def transformer(cfg, params, x: jnp.ndarray):
         embeddings += t2
 
     # Layer-normalize embeddings
-    embeddings = vmap(center)(embeddings)
+    embeddings = vmap(standardize)(embeddings)
     embeddings = elementwise_linear(params.pre_output_norm, embeddings)
 
     # And linearly project to output dimension

@@ -60,12 +60,15 @@ def main():
     d_ff = Arg("dff", 512, "Feedforward layer dimension")
     n_layers = Arg("layers", 3, "Number of layers")
 
-    save = Arg(
-        "save", False, "Save mode.  Log run to wandb, lengthen epochs and batches"
-    )
+    save = Arg("save", "", "Save mode.  Log run to wandb, lengthen epochs and batches")
 
     if save():
-        wandb.init(project="pure-transformer", entity="awfidius", config=Arg.config())
+        wandb.init(
+            project="pure-transformer",
+            entity="awfidius",
+            name=save() if len(save()) else None,
+            config=Arg.config(),
+        )
     else:
         print("Quick mode, disabling wandb, using small prime sizes")
         wandb.init(mode="disabled")
@@ -136,6 +139,10 @@ def main():
             )
         print("Saved jaxpr to", fn)
 
+    sgd = Arg("sgd", False, "Pure sgd")
+    zerograd = Arg("0grad", False, "Zero some grads")
+    zeroheadgrad = Arg("0grad-head", False, "Zero head grads")
+
     # grad_loss_batch = jax.pjit(grad_loss_batch_unjit, static_argnums=0)
 
     optimizer = Adam(params, lr=lr(), betas=(beta1(), beta2()))
@@ -147,6 +154,22 @@ def main():
         for i, data in enumerate(islice(dataset, batches())):
             # Get loss and gradients
             loss, grads = value_and_grad_loss_batch(cfg, params, data)
+
+            if zerograd():
+
+                def zap(p):
+                    p.weight *= 0
+                    p.bias *= 0
+
+                for l in grads.layers:
+                    if zeroheadgrad():
+                        for h in l.heads:
+                            zap(h.query)
+                            zap(h.value)
+                            zap(h.key)
+
+                    zap(l.ffn1)
+                    zap(l.ffn2)
 
             gnorms = jax.tree_map(lambda v: np.log10((np.linalg.norm(v))), grads)
 
@@ -168,7 +191,7 @@ def main():
                     "time": total_time,
                     "batch": i,
                     "loss": loss,
-                    "gnorms": wandb.Image(gnorms_all, caption="Gradient norm"),
+                    # "gnorms": wandb.Image(gnorms_all, caption="Parameter norm"),
                 }
             )  # 'gnorms': plt,  'gnorms_table': gnorms_table})
 
@@ -176,6 +199,8 @@ def main():
             if opt1bit():
                 gradsigns = jax.tree_map(jnp.sign, grads)
                 params = tree_axpy(-lr(), gradsigns, params)
+            elif sgd():
+                params = tree_axpy(-lr(), grads, params)
             else:
                 params = optimizer.step(params, grads)
 
