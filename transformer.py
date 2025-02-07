@@ -32,7 +32,7 @@ def rand(rng, f, shape, **kwargs):
     return rng, f(rng1, shape, **kwargs)
 
 
-def linear_init_uniform(rng: jax.random.KeyArray, in_features: int, out_features: int):
+def linear_init_uniform(rng: jax.random.PRNGKey, in_features: int, out_features: int):
     """
     Initialize a linear layer with uniform weights and zero bias
     """
@@ -74,7 +74,7 @@ flip_pe_coef = Arg("flip-pe", False, "Scale token embedding, not position embedd
 
 
 def transformer_init(
-    rng: jax.random.KeyArray,
+    rng: jax.random.PRNGKey,
     n_vocab: int,
     d_model: int,
     n_layers: int,
@@ -143,6 +143,7 @@ def transformer(cfg, params, x: jnp.ndarray):
     x: 1D array of L integers, representing the input sequence
     output: L x n_vocab logits
     """
+    print("Compiling for L=", x.shape)
 
     L, = x.shape # x is just 1D. Vmap/pmap will handle batching
 
