@@ -80,7 +80,7 @@ def main():
         epochs.default = 2
         batches.default = 10
         # Sizes are prime numbers, to catch any mismatches
-        d_model.default = 93
+        d_model.default = 13 * 7
         d_k.default = 13
         heads.default = 7
         d_ff.default = 111

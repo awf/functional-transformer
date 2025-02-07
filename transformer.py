@@ -83,6 +83,8 @@ def transformer_init(
     d_ff: int,
     max_len=4096,
 ):
+    assert d_k * n_heads == d_model
+
     # Build config struct for call
     config = ParamsDict()
     config.d_k = d_k
@@ -115,7 +117,7 @@ def transformer_init(
             head = ParamsDict()
             rng, head.query = linear_init_uniform(rng, d_model, d_k)
             rng, head.key = linear_init_uniform(rng, d_model, d_k)
-            rng, head.value = linear_init_uniform(rng, d_model, d_model)
+            rng, head.value = linear_init_uniform(rng, d_model, d_k)
 
             layer.heads.append(head)
 
@@ -164,6 +166,7 @@ def transformer(cfg, params, x: jnp.ndarray):
         t1 = elementwise_linear(layer.norm_self_attn, t1)   # L x Dm
 
         # Multi-head self-attention
+        self_attns = []
         for head in layer.heads:
 
             # Project into this head's query/key space
@@ -174,14 +177,16 @@ def transformer(cfg, params, x: jnp.ndarray):
             score = query @ key.T + mask                    # L x L
             attn = jax.nn.softmax(cfg.tau * score, axis=1)  # L x L
 
-            value = linear(head.value, t1)                  # L x Dm
-            self_attn = attn @ value                        # L x Dm
+            value = linear(head.value, t1)                  # L x Dk
+            self_attn = attn @ value                        # L x Dk
 
             # Add this head's contribution into embeddings
-            embeddings += self_attn                         # L x Dm
+            self_attns += [self_attn]                       # [L x Dk for #heads]
+
+        t2 = t1 + jnp.hstack(self_attns)
 
         # Layer-normalize embeddings
-        t2 = vmap(standardize)(embeddings)
+        t2 = vmap(standardize)(t2)
         t2 = elementwise_linear(layer.norm_ff, t2)          # L x Dm
 
         # Feedforward fully connected
