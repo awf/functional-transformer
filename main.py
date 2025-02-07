@@ -12,11 +12,11 @@ import logging
 
 import jax
 import jax.numpy as jnp
-from jax.config import config
 import numpy as np
 
 from functools import partial
 from itertools import islice
+
 
 import wandb
 
@@ -29,17 +29,22 @@ jnp.set_printoptions(threshold=20, edgeitems=3, linewidth=2048, precision=3)
 np.set_printoptions(threshold=20, edgeitems=3, linewidth=2048, precision=3)
 
 # Noisily fail when arrays are the wrong size
-config.update("jax_numpy_rank_promotion", "raise")
+jax.config.update("jax_numpy_rank_promotion", "raise")
+
+jax.config.update(
+    "jax_log_compiles", Arg("log-compiles", False, "Log JAX recompilations").peek()
+)
+jax.config.update("jax_compilation_cache_dir", "/tmp/jax_cache")
 
 LOGLEVEL = os.environ.get("LOGLEVEL", "INFO").upper()
-logger = logging.getLogger("pure-tranfomer")
+logger = logging.getLogger("pure-transformer")
 logger.setLevel(level=LOGLEVEL)
 timer = timer.get_timer(logging.WARNING)
 db = logger.debug
 
 
 def tree_axpy(a, x, y):
-    return jax.tree_map(lambda x, y: a * x + y, x, y)
+    return jax.tree.map(lambda x, y: a * x + y, x, y)
 
 
 def main():
@@ -101,14 +106,14 @@ def main():
 
     names = [k for (k, _) in params.items()]
     print(names)
-    assert len(names) == len(jax.tree_flatten(params)[0])
+    assert len(names) == len(jax.tree.flatten(params)[0])
 
     # gnorms_table = wandb.Table(columns=names)
     # wandb.log({"gnorms_table": gnorms_table})
 
-    sizes = jax.tree_map(lambda v: np.prod(v.shape), params)
+    sizes = jax.tree.map(lambda v: np.prod(v.shape), params)
     sizes.print("sizes:")
-    print("Total parameter count:", np.sum(jax.tree_flatten(sizes)[0]))
+    print("Total parameter count:", np.sum(jax.tree.flatten(sizes)[0]))
     # sizes_table = wandb.Table(columns=['param','size'])
 
     @partial(jax.jit, static_argnums=0)
@@ -150,67 +155,75 @@ def main():
     gnorms_all = np.zeros((len(names), 0))
     for epoch in range(epochs()):
 
-        # Iterate through batches
-        for i, data in enumerate(islice(dataset, batches())):
-            # Get loss and gradients
-            loss, grads = value_and_grad_loss_batch(cfg, params, data)
+        # epoch zero is straight through to sample:
+        if epoch > 0:
+            # Iterate through batches
+            for i, data in enumerate(islice(dataset, batches())):
+                # Get loss and gradients
+                loss, grads = value_and_grad_loss_batch(cfg, params, data)
 
-            if zerograd():
+                if zerograd():
 
-                def zap(p):
-                    p.weight *= 0
-                    p.bias *= 0
+                    def zap(p):
+                        p.weight *= 0
+                        p.bias *= 0
 
-                for l in grads.layers:
-                    if zeroheadgrad():
-                        for h in l.heads:
-                            zap(h.query)
-                            zap(h.value)
-                            zap(h.key)
+                    for l in grads.layers:
+                        if zeroheadgrad():
+                            for h in l.heads:
+                                zap(h.query)
+                                zap(h.value)
+                                zap(h.key)
 
-                    zap(l.ffn1)
-                    zap(l.ffn2)
+                        zap(l.ffn1)
+                        zap(l.ffn2)
 
-            gnorms = jax.tree_map(lambda v: np.log10((np.linalg.norm(v))), grads)
+                gnorms = jax.tree.map(lambda v: np.log10((np.linalg.norm(v))), grads)
 
-            gnorms_all = np.hstack(
-                (gnorms_all, np.array(jax.tree_leaves(gnorms), ndmin=2).T)
-            )
+                gnorms_all = np.hstack(
+                    (gnorms_all, np.array(jax.tree.leaves(gnorms), ndmin=2).T)
+                )
 
-            print(
-                wandb.run.name,
-                "loss",
-                loss,
-                "sample",
-                tostr(data[0]),
-            )  # , 'gnorms', gnorms)
-            total_time = time.time() - start
+                print(
+                    wandb.run.name,
+                    "loss",
+                    loss,
+                    "sample",
+                    tostr(data[0]),
+                )  # , 'gnorms', gnorms)
+                total_time = time.time() - start
 
-            wandb.log(
-                {
-                    "time": total_time,
-                    "batch": i,
-                    "loss": loss,
-                    # "gnorms": wandb.Image(gnorms_all, caption="Parameter norm"),
-                }
-            )  # 'gnorms': plt,  'gnorms_table': gnorms_table})
+                wandb.log(
+                    {
+                        "time": total_time,
+                        "batch": i,
+                        "loss": loss,
+                        # "gnorms": wandb.Image(gnorms_all, caption="Parameter norm"),
+                    }
+                )  # 'gnorms': plt,  'gnorms_table': gnorms_table})
 
-            # Update parameters
-            if opt1bit():
-                gradsigns = jax.tree_map(jnp.sign, grads)
-                params = tree_axpy(-lr(), gradsigns, params)
-            elif sgd():
-                params = tree_axpy(-lr(), grads, params)
-            else:
-                params = optimizer.step(params, grads)
+                # Update parameters
+                if opt1bit():
+                    gradsigns = jax.tree.map(jnp.sign, grads)
+                    params = tree_axpy(-lr(), gradsigns, params)
+                elif sgd():
+                    params = tree_axpy(-lr(), grads, params)
+                else:
+                    params = optimizer.step(params, grads)
 
         # Log a sample after each epoch
-        prompt = [dataset.stoi[c] for c in "Au"]
-        with timer("sample"):
+        with timer("sample and loss"):
+            test_data = jnp.hstack([*islice(dataset, 4)])
+            loss = loss_batch(cfg, params, test_data)
+
+            prompt = [dataset.stoi[c] for c in "Au"]
             sampled = transformer_sample(
                 cfg, params, jnp.array(prompt), length=20 + epoch
             )
-            print(loss, tostr(prompt) + "|" + tostr(sampled[len(prompt) :]))
+            print(
+                f"E{epoch} L{loss:.3f}",
+                f"Sample [{tostr(prompt)}|{tostr(sampled[len(prompt):])}]",
+            )
 
     # Grab Current Time After Running the Code
     end = time.time()
