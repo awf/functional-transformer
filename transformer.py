@@ -13,7 +13,7 @@ from functools import partial
 
 import jax.experimental.host_callback
 
-from jaxutils.Arg import Arg
+from awfutils import Arg
 from jaxutils.ParamsDict import ParamsDict
 
 
