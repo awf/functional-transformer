@@ -1,0 +1,5 @@
+wandb
+jax
+torch # until awfutils moves to optree
+-e awfutils/.
+-e awf-jaxutils/.

@@ -1,9 +1,9 @@
-[submodule "timer"]
-	path = timer
-	url = https://github.com/LucienShui/timer
 [submodule "jaxutils"]
 	path = jaxutils
 	url = https://github.com/awf/awf-jaxutils
 [submodule "awfutils"]
 	path = awfutils
 	url = https://github.com/awf/awfutils
+[submodule "timer"]
+	path = timer
+	url = https://github.com/LucienShui/timer
