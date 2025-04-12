@@ -56,7 +56,6 @@ def main():
     batch_size = Arg(flag="batch-size", doc="Batch size", default=128)
     epochs = Arg("epochs", 32)
     batches = Arg("batches", sys.maxsize, "Max batches")
-    opt1bit = Arg("1bit", False, "Use signs of gradients, not gradients")
 
     # Init the model params
     heads = Arg("heads", 8, "Number of attention heads")
@@ -77,7 +76,7 @@ def main():
     else:
         print("Quick mode, disabling wandb, using small prime sizes")
         wandb.init(mode="disabled")
-        epochs.default = 2
+        epochs.default = 5
         batches.default = 10
         # Sizes are prime numbers, to catch any mismatches
         d_model.default = 13 * 7
@@ -145,8 +144,6 @@ def main():
         print("Saved jaxpr to", fn)
 
     sgd = Arg("sgd", False, "Pure sgd")
-    zerograd = Arg("0grad", False, "Zero some grads")
-    zeroheadgrad = Arg("0grad-head", False, "Zero head grads")
 
     # grad_loss_batch = jax.pjit(grad_loss_batch_unjit, static_argnums=0)
 
@@ -155,58 +152,21 @@ def main():
     gnorms_all = np.zeros((len(names), 0))
     for epoch in range(epochs()):
 
-        # epoch zero is straight through to sample:
-        if epoch > 0:
+        if epoch == 0:
+            # epoch zero is straight through to sample
+            pass
+        else:
             # Iterate through batches
             for i, data in enumerate(islice(dataset, batches())):
                 # Get loss and gradients
                 loss, grads = value_and_grad_loss_batch(cfg, params, data)
 
-                if zerograd():
-
-                    def zap(p):
-                        p.weight *= 0
-                        p.bias *= 0
-
-                    for l in grads.layers:
-                        if zeroheadgrad():
-                            for h in l.heads:
-                                zap(h.query)
-                                zap(h.value)
-                                zap(h.key)
-
-                        zap(l.ffn1)
-                        zap(l.ffn2)
-
-                gnorms = jax.tree.map(lambda v: np.log10((np.linalg.norm(v))), grads)
-
-                gnorms_all = np.hstack(
-                    (gnorms_all, np.array(jax.tree.leaves(gnorms), ndmin=2).T)
-                )
-
-                print(
-                    wandb.run.name,
-                    "loss",
-                    loss,
-                    "sample",
-                    tostr(data[0]),
-                )  # , 'gnorms', gnorms)
+                print(f"{wandb.run.name} {loss=} sample {tostr(data[0])}")
                 total_time = time.time() - start
 
-                wandb.log(
-                    {
-                        "time": total_time,
-                        "batch": i,
-                        "loss": loss,
-                        # "gnorms": wandb.Image(gnorms_all, caption="Parameter norm"),
-                    }
-                )  # 'gnorms': plt,  'gnorms_table': gnorms_table})
-
+                wandb.log({"time": total_time, "batch": i, "loss": loss})
                 # Update parameters
-                if opt1bit():
-                    gradsigns = jax.tree.map(jnp.sign, grads)
-                    params = tree_axpy(-lr(), gradsigns, params)
-                elif sgd():
+                if sgd():
                     params = tree_axpy(-lr(), grads, params)
                 else:
                     params = optimizer.step(params, grads)
