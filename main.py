@@ -20,8 +20,8 @@ from itertools import islice
 
 import wandb
 
-from jaxutils.Arg import Arg
-from jaxutils.dataset import TinyShakespeare
+from awfutils import Arg
+from jaxutils.datasets import TinyShakespeare
 from jaxutils.Adam import Adam
 from jaxutils.show_jaxpr import show_jaxpr_and_xla, show_xla, show_jaxpr
 
