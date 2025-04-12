@@ -4,3 +4,6 @@
 [submodule "jaxutils"]
 	path = jaxutils
 	url = https://github.com/awf/awf-jaxutils
+[submodule "awfutils"]
+	path = awfutils
+	url = https://github.com/awf/awfutils
