@@ -13,21 +13,26 @@ def standardize(x, eps = 1e-5):
 ```
 then the entire transformer forward computation is 25 lines of code (excerpt from `transformer.py`):
 ```python
-def transformer(cfg, params, x: jnp.ndarray):
+def transformer(cfg, params, x: Int[Array, "L"]):
     """
     cfg: Config, from transformer_init, holds hyperparameters
     params: Current transformer parameters, initialized in init
     x: 1D array of L integers, representing the input sequence
     output: L x n_vocab logits
     """
-
     L, = x.shape # x is just 1D. Vmap/pmap will handle batching
 
+    # Make shape checkers for awfutils.typecheck
+    LxL = lambda x: x.shape == (L, L)
+    LxDk = lambda x: x.shape == (L, cfg.d_k)
+    LxDff = lambda x: x.shape == (L, cfg.d_ff)
+    LxDm = lambda x: x.shape == (L, cfg.d_model)
+
     # Create mask: 0 to attend, -Inf to ignore
-    mask = jnp.log(jnp.tril(jnp.ones((L, L))))
+    mask : LxL = jnp.log(jnp.tril(jnp.ones((L, L))))
 
     # Start with token embeddings
-    embeddings = cfg.lambda_e * params.embeddings[x, :]     # L x Dm
+    embeddings : LxDm = cfg.lambda_e * params.embeddings[x, :]
 
     # Add (learned) positional encodings
     embeddings += cfg.lambda_pe * params.positional_encodings[:L, :]
@@ -36,34 +41,37 @@ def transformer(cfg, params, x: jnp.ndarray):
     for layer in params.layers:
 
         # Layer-normalize embeddings
-        t1 = vmap(standardize)(embeddings)
-        t1 = elementwise_linear(layer.norm_self_attn, t1)   # L x Dm
+        t1 : LxDm = vmap(standardize)(embeddings)
+        t1 = elementwise_linear(layer.norm_self_attn, t1)
 
         # Multi-head self-attention
+        self_attns = []
         for head in layer.heads:
 
             # Project into this head's query/key space
-            query = linear(head.query, t1)                  # L x Dk
-            key = linear(head.key, t1)                      # L x Dk
+            query : LxDk = linear(head.query, t1)
+            key : LxDk = linear(head.key, t1)
 
             # Compute L x L attention matrix
-            score = query @ key.T + mask                    # L x L
-            attn = jax.nn.softmax(cfg.tau * score, axis=1)  # L x L
+            score : LxL = query @ key.T + mask
+            attn : LxL = jax.nn.softmax(cfg.tau * score, axis=1)
 
-            value = linear(head.value, t1)                  # L x Dm
-            self_attn = attn @ value                        # L x Dm
+            value : LxDk = linear(head.value, t1)
+            self_attn : LxDk = attn @ value
 
             # Add this head's contribution into embeddings
-            embeddings += self_attn                         # L x Dm
+            self_attns += [self_attn]  # [LxDk for #heads]
+
+        t2 : LxDm = t1 + jnp.hstack(self_attns)
 
         # Layer-normalize embeddings
-        t2 = vmap(standardize)(embeddings)
-        t2 = elementwise_linear(layer.norm_ff, t2)          # L x Dm
+        t2 : LxDm = vmap(standardize)(t2)
+        t2 : LxDm = elementwise_linear(layer.norm_ff, t2)
 
         # Feedforward fully connected
-        t2 = linear(layer.ffn1, t2)                         # L x Dff
+        t2 : LxDff = linear(layer.ffn1, t2)
         t2 = jax.nn.relu(t2)
-        t2 = linear(layer.ffn2, t2)                         # L x Dm
+        t2 : LxDm = linear(layer.ffn2, t2)
 
         # Add this layer's contribution into embeddings
         embeddings += t2
@@ -73,7 +81,7 @@ def transformer(cfg, params, x: jnp.ndarray):
     embeddings = elementwise_linear(params.pre_output_norm, embeddings)
 
     # And linearly project to output dimension
-    return linear(params.output, embeddings)                # L x n_vocab 
+    return linear(params.output, embeddings) # L x n_vocab 
 ```
 
 The loss and its gradient needs a few more lines:

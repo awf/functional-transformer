@@ -161,10 +161,11 @@ def main():
                 # Get loss and gradients
                 loss, grads = value_and_grad_loss_batch(cfg, params, data)
 
-                print(f"{wandb.run.name} {loss=} sample {tostr(data[0])}")
+                # print(f"{wandb.run.name} loss {loss.item()} data {tostr(data[0])}")
                 total_time = time.time() - start
 
                 wandb.log({"time": total_time, "batch": i, "loss": loss})
+
                 # Update parameters
                 if sgd():
                     params = tree_axpy(-lr(), grads, params)

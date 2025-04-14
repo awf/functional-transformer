@@ -1,5 +1,6 @@
 wandb
 jax
+jaxtyping
 torch # until awfutils moves to optree
 -e timer/.
 -e awfutils/.
