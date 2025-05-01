@@ -1,4 +1,6 @@
 {
-    "editor.formatOnSave": true,
-    "python.formatting.provider": "black"
+  "editor.formatOnSave": true,
+  "python.formatting.provider": "black",
+  "jupyter.debugJustMyCode": false,
+  "debugpy.debugJustMyCode": false,
 }

@@ -22,7 +22,7 @@ def transformer(cfg, params, x: Int[Array, "L"]):
     """
     L, = x.shape # x is just 1D. Vmap/pmap will handle batching
 
-    # Make shape checkers for awfutils.typecheck
+    # Make shape checkers (https://github.com/awf/awfutils?tab=readme-ov-file#typecheck)
     LxL = lambda x: x.shape == (L, L)
     LxDk = lambda x: x.shape == (L, cfg.d_k)
     LxDff = lambda x: x.shape == (L, cfg.d_ff)

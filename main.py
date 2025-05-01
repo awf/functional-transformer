@@ -97,9 +97,9 @@ def main():
         rnd_key,
         dataset.n_tokens,
         d_model=d_model(),
-        d_k=d_k(),
         n_layers=n_layers(),
         n_heads=heads(),
+        d_k=d_k(),
         d_ff=d_ff(),
     )
 
