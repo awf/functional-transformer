@@ -42,46 +42,46 @@ def transformer(cfg, params, x: Int[Array, "L"]):
 
         # Layer-normalize embeddings
         t1 : LxDm = vmap(standardize)(embeddings)
-        t1 = elementwise_linear(layer.norm_self_attn, t1)
+        t1 : LxDm = t1 @ jnp.diag(layer.norm_self_attn)
 
         # Multi-head self-attention
         self_attns = []
         for head in layer.heads:
 
             # Project into this head's query/key space
-            query : LxDk = linear(head.query, t1)
-            key : LxDk = linear(head.key, t1)
+            query : LxDk = t1 @ head.query
+            key : LxDk = t1 @ head.key
 
             # Compute L x L attention matrix
             score : LxL = query @ key.T + mask
             attn : LxL = jax.nn.softmax(cfg.tau * score, axis=1)
 
-            value : LxDk = linear(head.value, t1)
+            value : LxDk = t1 @ head.value
             self_attn : LxDk = attn @ value
 
-            # Add this head's contribution into embeddings
+            # Add this head's contribution to the list
             self_attns += [self_attn]  # [LxDk for #heads]
 
-        t2 : LxDm = t1 + jnp.hstack(self_attns)
+        embeddings += jnp.hstack(self_attns)
 
         # Layer-normalize embeddings
-        t2 : LxDm = vmap(standardize)(t2)
-        t2 : LxDm = elementwise_linear(layer.norm_ff, t2)
+        t2 : LxDm = vmap(standardize)(embeddings)
+        t2 : LxDm = t2 @ jnp.diag(layer.norm_ff)
 
         # Feedforward fully connected
-        t2 : LxDff = linear(layer.ffn1, t2)
+        t2 : LxDff = t2 @ layer.ffn1
         t2 = jax.nn.relu(t2)
-        t2 : LxDm = linear(layer.ffn2, t2)
+        t2 : LxDm = t2 @ layer.ffn2
 
         # Add this layer's contribution into embeddings
         embeddings += t2
 
     # Layer-normalize embeddings
-    embeddings = vmap(standardize)(embeddings)
-    embeddings = elementwise_linear(params.pre_output_norm, embeddings)
+    embeddings : LxDm = vmap(standardize)(embeddings)
+    embeddings = embeddings @ jnp.diag(params.pre_output_norm)
 
     # And linearly project to output dimension
-    return linear(params.output, embeddings) # L x n_vocab 
+    return embeddings @ params.output # L x n_vocab 
 ```
 
 The loss and its gradient needs a few more lines:
@@ -115,21 +115,21 @@ params.positional_encodings = jnp.zeros((max_len, d_model))
 params.layers = []
 for _ in range(n_layers):
     layer = ParamsDict()
-    layer.norm_self_attn = layernorm_init_identity(d_model)
+    layer.norm_self_attn = jnp.ones(d_model)
 
     layer.heads = []
     for _ in range(n_heads):
         head = ParamsDict()
-        rng,head.query = linear_init_uniform(rng, d_model, d_k)
-        rng,head.key = linear_init_uniform(rng, d_model, d_k)
-        rng,head.value = linear_init_uniform(rng, d_model, d_model)
-        
+        rng, head.query = matrix_init_uniform(rng, d_model, d_k)
+        rng, head.key = matrix_init_uniform(rng, d_model, d_k)
+        rng, head.value = matrix_init_uniform(rng, d_model, d_k)
+
         layer.heads.append(head)
 
-    layer.norm_ff = layernorm_init_identity(d_model)
+    layer.norm_ff = jnp.ones(d_model)
 
-    rng,layer.ffn1 = linear_init_uniform(rng, d_model, d_ff)
-    rng,layer.ffn2 = linear_init_uniform(rng, d_ff, d_model)
+    rng, layer.ffn1 = matrix_init_uniform(rng, d_model, d_ff)
+    rng, layer.ffn2 = matrix_init_uniform(rng, d_ff, d_model)
 
     params.layers.append(layer)
 
