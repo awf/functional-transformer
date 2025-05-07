@@ -49,16 +49,6 @@ def matrix_init_uniform(rng: jax.random.PRNGKey, in_features: int, out_features:
     )
 
 
-def linear_init_uniform(rng: jax.random.PRNGKey, in_features: int, out_features: int):
-    """
-    Initialize a linear layer with uniform weights and zero bias
-    """
-    params = ParamsDict()
-    rng, params.weight = matrix_init_uniform(rng, in_features, out_features)
-    params.bias = jnp.zeros((out_features,))
-    return rng, params
-
-
 # Layer norm
 def elementwise_linear_init_identity(shape):
     """
