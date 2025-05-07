@@ -145,6 +145,7 @@ def main():
 
     sgd = Arg("sgd", False, "Pure sgd")
 
+    test_data = jnp.hstack([*islice(dataset, 4)])
     # grad_loss_batch = jax.pjit(grad_loss_batch_unjit, static_argnums=0)
 
     optimizer = Adam(params, lr=lr(), betas=(beta1(), beta2()))
@@ -173,18 +174,16 @@ def main():
                     params = optimizer.step(params, grads)
 
         # Log a sample after each epoch
-        with timer("sample and loss"):
-            test_data = jnp.hstack([*islice(dataset, 4)])
-            loss = loss_batch(cfg, params, test_data)
+        test_loss = loss_batch(cfg, params, test_data)
 
+        print(f"E{epoch} test={test_loss:.3f}")
+        if epoch % 25 == 0:
+          with timer("sample"):
             prompt = [dataset.stoi[c] for c in "Au"]
             sampled = transformer_sample(
                 cfg, params, jnp.array(prompt), length=20 + epoch
-            )
-            print(
-                f"E{epoch} L{loss:.3f}",
-                f"Sample [{tostr(prompt)}|{tostr(sampled[len(prompt):])}]",
-            )
+            ) 
+            print(f"Sample [{tostr(prompt)}|{tostr(sampled[len(prompt):])}]")
 
     # Grab Current Time After Running the Code
     end = time.time()

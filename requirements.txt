@@ -1,5 +1,5 @@
 wandb
-jax
+jax[cuda]==0.5
 jaxtyping
 torch # until awfutils moves to optree
 -e timer/.

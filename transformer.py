@@ -34,13 +34,13 @@ def rand(rng, f, shape, **kwargs):
     return rng, f(rng1, shape, **kwargs)
 
 
-def linear_init_uniform(rng: jax.random.PRNGKey, in_features: int, out_features: int):
+def matrix_init_uniform(rng: jax.random.PRNGKey, in_features: int, out_features: int):
     """
-    Initialize a linear layer with uniform weights and zero bias
+    Initialize a matrix with uniform weights, scaled by 1/sqrt(in_features)
     """
     params = ParamsDict()
     rnd_range = 1 / in_features**0.5
-    rng, params.weight = rand(
+    return rand(
         rng,
         jax.random.uniform,
         (in_features, out_features),
@@ -48,6 +48,13 @@ def linear_init_uniform(rng: jax.random.PRNGKey, in_features: int, out_features:
         maxval=rnd_range,
     )
 
+
+def linear_init_uniform(rng: jax.random.PRNGKey, in_features: int, out_features: int):
+    """
+    Initialize a linear layer with uniform weights and zero bias
+    """
+    params = ParamsDict()
+    rng, params.weight = matrix_init_uniform(rng, in_features, out_features)
     params.bias = jnp.zeros((out_features,))
     return rng, params
 
@@ -114,27 +121,27 @@ def transformer_init(
     params.layers = []
     for _ in range(n_layers):
         layer = ParamsDict()
-        layer.norm_self_attn = elementwise_linear_init_identity(d_model)
+        layer.norm_self_attn = jnp.ones(d_model)
 
         layer.heads = []
         for _ in range(n_heads):
             head = ParamsDict()
-            rng, head.query = linear_init_uniform(rng, d_model, d_k)
-            rng, head.key = linear_init_uniform(rng, d_model, d_k)
-            rng, head.value = linear_init_uniform(rng, d_model, d_k)
+            rng, head.query = matrix_init_uniform(rng, d_model, d_k)
+            rng, head.key = matrix_init_uniform(rng, d_model, d_k)
+            rng, head.value = matrix_init_uniform(rng, d_model, d_k)
 
             layer.heads.append(head)
 
-        layer.norm_ff = elementwise_linear_init_identity(d_model)
+        layer.norm_ff = jnp.ones(d_model)
 
-        rng, layer.ffn1 = linear_init_uniform(rng, d_model, d_ff)
-        rng, layer.ffn2 = linear_init_uniform(rng, d_ff, d_model)
+        rng, layer.ffn1 = matrix_init_uniform(rng, d_model, d_ff)
+        rng, layer.ffn2 = matrix_init_uniform(rng, d_ff, d_model)
 
         params.layers.append(layer)
 
     # Final normalization and output layer
-    params.pre_output_norm = elementwise_linear_init_identity(d_model)
-    rng, params.output = linear_init_uniform(rng, d_model, n_vocab)
+    params.pre_output_norm = jnp.ones(d_model)
+    rng, params.output = matrix_init_uniform(rng, d_model, n_vocab)
 
     return rng, config, params
 
@@ -149,6 +156,11 @@ def transformer(cfg, params, x: Int[Array, "L"]):
     params: Current transformer parameters, initialized in init
     x: 1D array of L integers, representing the input sequence
     output: L x n_vocab logits
+
+    Obviously, this is just one example of a transformer. There
+    are many variations, depending where normalizations go, 
+    whether or not there is bias, what kinds of position 
+    encodings, etc.
     """
     print("Compiling for L=", x.shape)
 
@@ -174,46 +186,46 @@ def transformer(cfg, params, x: Int[Array, "L"]):
 
         # Layer-normalize embeddings
         t1 : LxDm = vmap(standardize)(embeddings)
-        t1 = elementwise_linear(layer.norm_self_attn, t1)
+        t1 : LxDm = t1 @ jnp.diag(layer.norm_self_attn)
 
         # Multi-head self-attention
         self_attns = []
         for head in layer.heads:
 
             # Project into this head's query/key space
-            query : LxDk = linear(head.query, t1)
-            key : LxDk = linear(head.key, t1)
+            query : LxDk = t1 @ head.query
+            key : LxDk = t1 @ head.key
 
             # Compute L x L attention matrix
             score : LxL = query @ key.T + mask
             attn : LxL = jax.nn.softmax(cfg.tau * score, axis=1)
 
-            value : LxDk = linear(head.value, t1)
+            value : LxDk = t1 @ head.value
             self_attn : LxDk = attn @ value
 
-            # Add this head's contribution into embeddings
+            # Add this head's contribution to the list
             self_attns += [self_attn]  # [LxDk for #heads]
 
-        t2 : LxDm = t1 + jnp.hstack(self_attns)
+        embeddings += jnp.hstack(self_attns)
 
         # Layer-normalize embeddings
-        t2 : LxDm = vmap(standardize)(t2)
-        t2 : LxDm = elementwise_linear(layer.norm_ff, t2)
+        t2 : LxDm = vmap(standardize)(embeddings)
+        t2 : LxDm = t2 @ jnp.diag(layer.norm_ff)
 
         # Feedforward fully connected
-        t2 : LxDff = linear(layer.ffn1, t2)
+        t2 : LxDff = t2 @ layer.ffn1
         t2 = jax.nn.relu(t2)
-        t2 : LxDm = linear(layer.ffn2, t2)
+        t2 : LxDm = t2 @ layer.ffn2
 
         # Add this layer's contribution into embeddings
         embeddings += t2
 
     # Layer-normalize embeddings
-    embeddings = vmap(standardize)(embeddings)
-    embeddings = elementwise_linear(params.pre_output_norm, embeddings)
+    embeddings : LxDm = vmap(standardize)(embeddings)
+    embeddings = embeddings @ jnp.diag(params.pre_output_norm)
 
     # And linearly project to output dimension
-    return linear(params.output, embeddings) # L x n_vocab 
+    return embeddings @ params.output # L x n_vocab 
 # fmt: on
 
 
